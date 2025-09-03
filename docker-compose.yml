@@ -1,0 +1,185 @@
+
+version: '3.8'
+services:
+
+
+  frontend:
+    image: frontend-server:latest
+    build:
+      context: ./Front-End
+      dockerfile: Dockerfile
+    container_name: alfred_dashboard
+    # volumes:
+    #   - "./Front-End:/app"
+    working_dir: /app
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=100
+    ports:
+      - "4644:4644"
+    restart: always
+    command: >
+      sh -c "npm run dev -- --host 0.0.0.0 --port 4644"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:4644"] 
+      interval: 129s
+      timeout: 2s
+      retries: 5
+    mem_limit: 500MB
+    cpus: "1.5"
+
+  api:
+    image: api:latest
+    privileged: true    
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    volumes:
+      # - "./Back-End:/app"
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    container_name: api
+    restart: always
+    ports:
+      - "4959:4959"
+    command: flask --app api:app run --host=0.0.0.0 --port=4959
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:4959"] 
+      interval: 129s
+      timeout: 2s
+      retries: 5
+    mem_limit: 500MB
+    cpus: "1.5"
+
+  telegram:
+    image: telegram-server:latest
+    container_name: alfred-telegram-agent
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    # volumes:
+    #   - "./Back-End:/app"
+    working_dir: /app
+    command: >
+      sh -c "python Telegram.py"
+    mem_limit: 500MB
+    cpus: "1.25"   
+
+  discord:
+    image: discord-server:latest
+    container_name: alfred-discord-agent
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    # volumes:
+      # - "./Back-End:/app"
+    working_dir: /app
+    command: >
+      sh -c "python Discord.py"
+    mem_limit: 500MB
+    cpus: "1.25"   
+
+
+  whatsapp:
+    image: whatsapp-server:latest
+    container_name: alfred-whatsapp-agent
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    # volumes:
+      # - "./Back-End:/app"
+    command: >
+      sh -c "ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200"
+    environment:
+      - NGROK_AUTHTOKEN=2tVpX4kNbZmrr5O64bEXiD85NM9_7WSymtWCdpmGfVCwRgSXh
+    ports:
+      - "5200:5200"
+    working_dir: /app
+    mem_limit: 500MB
+    cpus: "1.25"   
+
+  evolution-api:
+    container_name: whatsapp-evolution-api
+    image: atendai/evolution-api:v1.8.2
+    restart: always
+    ports:
+      - 8080:8080
+    expose:
+      - 8080
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+    environment:
+      - SERVER_URL=http://localhost:8080
+      - DOCKER_ENV=true
+      - LOG_LEVEL=ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,DARK,WEBHOOKS
+      - DEL_INSTANCE=false
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - STORE_MESSAGES=true
+      - STORE_MESSAGE_UP=true
+      - STORE_CONTACTS=true
+      - STORE_CHATS=true
+      - CLEAN_STORE_CLEANING_INTERVAL=7200
+      - CLEAN_STORE_MESSAGES=true
+      - CLEAN_STORE_MESSAGE_UP=true
+      - CLEAN_STORE_CONTACTS=true
+      - CLEAN_STORE_CHATS=true
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=0417bf43b0a8969bd6685bcb49d783df
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - QRCODE_LIMIT=30
+      - WEBHOOK_GLOBAL_ENABLED=false
+      - WEBHOOK_GLOBAL_URL=http://localhost:8080
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
+      - WEBHOOK_EVENTS_APPLICATION_STARTUP=false
+      - WEBHOOK_EVENTS_QRCODE_UPDATED=true
+      - WEBHOOK_EVENTS_MESSAGES_SET=false
+      - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+      - WEBHOOK_EVENTS_MESSAGES_UPDATE=true
+      - WEBHOOK_EVENTS_CONTACTS_SET=true
+      - WEBHOOK_EVENTS_CONTACTS_UPSERT=true
+      - WEBHOOK_EVENTS_CONTACTS_UPDATE=true
+      - WEBHOOK_EVENTS_PRESENCE_UPDATE=true
+      - WEBHOOK_EVENTS_CHATS_SET=true
+      - WEBHOOK_EVENTS_CHATS_UPSERT=true
+      - WEBHOOK_EVENTS_CHATS_UPDATE=true
+      - WEBHOOK_EVENTS_CHATS_DELETE=true
+      - WEBHOOK_EVENTS_GROUPS_UPSERT=true
+      - WEBHOOK_EVENTS_GROUPS_UPDATE=true
+      - WEBHOOK_EVENTS_GROUP_PARTICIPANTS_UPDATE=true
+      - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
+      - REDIS_ENABLED=false
+      - REDIS_URI=redis://redis:6379
+      # Aivar Banco de Dados
+      - DATABASE_ENABLED=false
+      # - DATABASE_CONNECTION_URI=mongodb://admin:UHeZ3EKzU=@217.76.58.96:27017/?authSource=admin&readPreference=primary&ssl=false&directConnection=true
+      - DATABASE_CONNECTION_DB_PREFIX_NAME=evo
+      # Escolha o que deseja salvar
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=false
+      - DATABASE_SAVE_MESSAGE_UPDATE=false
+      - DATABASE_SAVE_DATA_CONTACTS=false
+      - DATABASE_SAVE_DATA_CHATS=false
+    command: ['node', './dist/src/main.js']
+
+
+  ngrok:
+    image: ngrok/ngrok:3    # imagem oficial, garante >= v3.7.0
+    depends_on:
+      - evolution-api
+    environment:
+      NGROK_AUTHTOKEN: 2cv4Dn37agcf3MNhri8SRgwpquI_6vQXkiKQosU8XyUfrWL7L
+    entrypoint: ["ngrok"]
+    command: >
+      http evolution-api:8080 --domain=accepted-poorly-maggot.ngrok-free.app
+      --log=stdout
+      --log-level=debug
+    ports:
+      - 4040:4040
+
+volumes:
+  evolution_instances:
+  evolution_store:

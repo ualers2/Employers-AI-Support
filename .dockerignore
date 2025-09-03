@@ -1,0 +1,12 @@
+
+# Exclua arquivos compilados e caches
+__pycache__/
+*.pyc
+
+MemeContext.py
+run-server.py
+Front-End/node_modules/
+
+# Exclua diretórios do controle de versão
+.git/
+.gitignore
