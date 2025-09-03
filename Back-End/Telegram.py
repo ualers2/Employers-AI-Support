@@ -11,6 +11,7 @@ from Alfred import Alfred
 #########################################
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'modules', 'Keys', 'keys.env'))
+os.chdir(os.path.join(os.path.dirname(__file__)))
 from modules.Keys.Firebase.FirebaseApp import init_firebase
 import firebase_admin
 from firebase_admin import db

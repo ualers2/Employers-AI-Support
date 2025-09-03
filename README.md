@@ -1,5 +1,5 @@
 
-# Employers AI o seu funcionario de suporte autonomo 
+# Employers AI
 ![Imagem](Docs/gifs/1.png)
 
 
