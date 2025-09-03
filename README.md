@@ -1,3 +1,8 @@
+
+# Employers AI o seu funcionario de suporte autonomo 
+![Imagem](Docs/gifs/1.png)
+
+
 # Inicio do mvp versao 1 (07:00 - 27/06/2025)
 
 ---
