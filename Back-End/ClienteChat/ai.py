@@ -77,8 +77,8 @@ async def CustomerChatAgent(
     
     # Documentos da empresa para contexto
     company_documents = {
-        "manifesto": "a1cca8d6-d7f1-4d62-a2bc-3cb1f258c9db",
-        "limitacoes": "85757689-eb06-4f01-8cbb-a77227a6756c", 
+        "manifesto": "d3cdce8c-83e9-48ce-9999-a9f03b8b27c3",
+        "limitacoes": "cc5915a2-2b5b-4a97-945e-d89efa6ec674", 
         "Perguntas": "7c46cb7e-6b3f-4e1c-8d81-0856caf6c492",
         "Informacoes": "9d5a06f4-76f9-4920-8ba2-dcd20e29f5bc"
     }
@@ -163,7 +163,7 @@ async def _load_company_documents(company_docs: Dict, filenames: List[str],
             if os.path.exists(storage_abs_path):
                 path_file = storage_abs_path
             else:
-                path_file = download_(upload_url, storage_abs_path, "documents", file_id, "freitasalexandre810@gmail_com")
+                path_file = download_(upload_url, storage_abs_path, "support", file_id, "freitasalexandre810@gmail_com")
 
             with open(path_file, "r", encoding="utf-8") as f:
                 content = f.read()

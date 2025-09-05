@@ -38,50 +38,12 @@ class Alfred:
         self.adxitional_instructions_Alfred = ""
         self.system_ = "siga com os objetivos da instrucao"
 
-        instruction_db = data.get("alfredInstructions", "")
+        self.instruction_db = data.get("alfredInstructions", "")
         self.logger.info(self.nameAlfred)
         self.logger.info(self.model_selectAlfred)
-        self.logger.info(instruction_db)
+        self.logger.info(self.instruction_db)
 
 
-        all_paths = self.get_alfred_local_file_paths()
-        all_content = ""
-        for path in all_paths:
-            file_extension = path.rsplit('.', 1)[1].lower() if '.' in path else ''
-            if file_extension in {'md', 'txt', 'csv', 'json'}:
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        all_content += content + "\n\n--- FIM DO ARQUIVO ---\n\n" # Adicionar um separador
-                except Exception as e:
-                    # Logar ou lidar com erros de leitura de arquivo (permissão, corrupção, etc.)
-                    print(f"Erro ao ler arquivo de texto {path}: {e}")
-            elif file_extension == 'pdf':
-                # Implementar lógica para extrair texto de PDF
-                print(f"Implementar extração de texto para PDF: {path}")
-                from PyPDF2 import PdfReader
-                reader = PdfReader(path)
-                for page in reader.pages:
-                    all_content += page.extract_text() + "\n"
-            elif file_extension == 'docx':
-                # Implementar lógica para extrair texto de DOCX
-                print(f"Implementar extração de texto para DOCX: {path}")
-                from docx import Document
-                document = Document(path)
-                for para in document.paragraphs:
-                    all_content += para.text + "\n"
-            else:
-                print(f"Tipo de arquivo não suportado para leitura de conteúdo: {path}")
-        self.logger.info(all_content)
-        self.instruction = f"""
-        **Contexto e informacoes:**  
-        Aqui voce encontra Contexto e informacoes do aplicativo 
-        {all_content}
-
-        ---
-        {instruction_db}
-
-        """
         
 
     def get_alfred_local_file_paths(self):
@@ -125,7 +87,36 @@ class Alfred:
             return []
 
     async def Alfred(self, mensagem):
-        
+
+        all_paths = self.get_alfred_local_file_paths()
+        all_content = ""
+        for path in all_paths:
+            file_extension = path.rsplit('.', 1)[1].lower() if '.' in path else ''
+            if file_extension in {'md', 'txt', 'csv', 'json'}:
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        all_content += content + "\n\n--- FIM DO ARQUIVO ---\n\n" # Adicionar um separador
+                except Exception as e:
+                    # Logar ou lidar com erros de leitura de arquivo (permissão, corrupção, etc.)
+                    print(f"Erro ao ler arquivo de texto {path}: {e}")
+            elif file_extension == 'pdf':
+                # Implementar lógica para extrair texto de PDF
+                print(f"Implementar extração de texto para PDF: {path}")
+                from PyPDF2 import PdfReader
+                reader = PdfReader(path)
+                for page in reader.pages:
+                    all_content += page.extract_text() + "\n"
+        self.logger.info(all_content)
+        self.instruction = f"""
+        **Contexto e informacoes:**  
+        Aqui voce encontra Contexto e informacoes do aplicativo 
+        {all_content}
+
+        ---
+        {self.instruction_db}
+
+        """
         # Tools_Name_dict = Egetoolsv2(list(tools_agent))
         agent = Agent(
             name=self.nameAlfred,

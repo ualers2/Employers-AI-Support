@@ -34,3 +34,33 @@ Upload bem-sucedido!
   "video_id": "9d5a06f4-76f9-4920-8ba2-dcd20e29f5bc"
 }
 2025-09-05 09:39:07,765 - INFO - ID: 9d5a06f4-76f9-4920-8ba2-dcd20e29f5bc
+2025-09-05 11:41:50,656 - INFO - Tentando enviar 'E:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\Docs\Manifesto da Marca.md' para https://videomanager.api.mediacutsstudio.com...
+2025-09-05 11:41:50,657 - INFO - Com metadados: {
+  "projectName": "support",
+  "type_project": "files"
+}
+2025-09-05 11:41:51,718 - INFO - 
+Upload bem-sucedido!
+2025-09-05 11:41:51,719 - INFO - Resposta do servidor:
+2025-09-05 11:41:51,719 - INFO - {
+  "filename": "Manifesto_da_Marca.md",
+  "message": "V\u00eddeo e metadados enviados com sucesso!",
+  "project_name": "support",
+  "video_id": "d3cdce8c-83e9-48ce-9999-a9f03b8b27c3"
+}
+2025-09-05 11:41:51,720 - INFO - ID: d3cdce8c-83e9-48ce-9999-a9f03b8b27c3
+2025-09-05 11:42:37,632 - INFO - Tentando enviar 'E:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\Docs\Limitações de Conta do Usuário.md' para https://videomanager.api.mediacutsstudio.com...
+2025-09-05 11:42:37,633 - INFO - Com metadados: {
+  "projectName": "support",
+  "type_project": "files"
+}
+2025-09-05 11:42:38,318 - INFO - 
+Upload bem-sucedido!
+2025-09-05 11:42:38,319 - INFO - Resposta do servidor:
+2025-09-05 11:42:38,319 - INFO - {
+  "filename": "Limitacoes_de_Conta_do_Usuario.md",
+  "message": "V\u00eddeo e metadados enviados com sucesso!",
+  "project_name": "support",
+  "video_id": "cc5915a2-2b5b-4a97-945e-d89efa6ec674"
+}
+2025-09-05 11:42:38,320 - INFO - ID: cc5915a2-2b5b-4a97-945e-d89efa6ec674

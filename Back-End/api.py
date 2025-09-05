@@ -1615,6 +1615,12 @@ def get_alfred_status():
         "lastHeartbeat": last_alfred_heartbeat.isoformat() # Still provide heartbeat info
     }
 
+    current_status_Discord = "offline"
+    current_message_Discord = "(Discord) Offline."
+    current_status = "offline"
+    current_message = "(Telegram) Offline."
+    current_status_WhatsApp = "offline"
+    current_message_WhatsApp = "(WhatsApp) Offline."
     try:
         # 1. Check Firebase Database Connectivity (general check)
         try:
