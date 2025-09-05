@@ -6,7 +6,7 @@ import asyncio
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
-import smtplib
+import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -23,9 +23,19 @@ from datetime import datetime, timedelta, timezone
 from docker import DockerClient, errors
 import docker 
 
+import asyncio
+import logging
+from flask import request, jsonify
+from typing import Dict, Any, Optional
+from datetime import datetime
+import time
+
+
+# Import da versão ultra melhorada
+from ClienteChat.ai import CustomerChatAgent
+
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:8081/", "*","https://keen-snipe-83.rshare.io", "http://localhost:3000"]}})
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +59,7 @@ discord_status_ref = db.reference('alfred_status/Discord', app=app_1)
 WhatsApp_status_ref = db.reference('alfred_status/WhatsApp', app=app_1)    
 alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
 
+UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -67,9 +78,183 @@ async def AgentAlfred():
 
     # return resultados  # <-- retorna a lista com 3 dicts
 
+
+def _enrich_user_context(user_context: Dict[str, Any], request_obj) -> Dict[str, Any]:
+    """Enriquece o contexto do usuário com informações da requisição"""
+    
+    enriched = user_context.copy()
+    
+    # Adiciona timestamp
+    enriched["timestamp"] = datetime.utcnow().isoformat()
+    
+    # Informações da requisição (se necessário para analytics)
+    enriched["request_info"] = {
+        "user_agent": request_obj.headers.get("User-Agent", ""),
+        "ip": request_obj.environ.get("HTTP_X_FORWARDED_FOR", request_obj.remote_addr),
+        "referer": request_obj.headers.get("Referer", "")
+    }
+    
+    # Define user_id se não fornecido
+    if not enriched.get("user_id"):
+        enriched["user_id"] = f"anonymous_{hash(enriched['request_info']['ip']) % 10000}"
+    
+    # Inferências básicas se dados não fornecidos
+    if not enriched.get("user_type"):
+        enriched["user_type"] = "prospect"  # Default para visitantes da landing page
+    
+    return enriched
+
+def _format_successful_response(result: Dict[str, Any], session_id: Optional[str]) -> Dict[str, Any]:
+    """Formata resposta de sucesso com dados estruturados"""
+    
+    response = result["response"]
+    analytics = result.get("analytics")
+    
+    # Resposta base
+    response_data = {
+        "success": True,
+        "reply": response.content,
+        "metadata": {
+            "conversation_type": response.conversation_type,
+            "user_intent": response.user_intent,
+            "response_tone": response.response_tone,
+            "escalation_needed": response.escalation_needed,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    }
+    
+    # Adiciona session_id se fornecido
+    if session_id:
+        response_data["session_id"] = session_id
+    
+    # Próximos passos sugeridos
+    if response.next_steps:
+        response_data["suggested_actions"] = response.next_steps
+    
+    # Sugestões de follow-up
+    if response.follow_up_suggestions:
+        response_data["follow_up_suggestions"] = response.follow_up_suggestions
+    
+    # Analytics (se habilitado e disponível)
+    if analytics:
+        response_data["analytics"] = {
+            "satisfaction_score": analytics.user_satisfaction_score,
+            "key_topics": analytics.key_topics,
+            "conversation_summary": analytics.conversation_summary
+        }
+        
+        # Oportunidades de marketing (apenas para uso interno)
+        if analytics.marketing_opportunities:
+            response_data["internal"] = {
+                "marketing_opportunities": analytics.marketing_opportunities
+            }
+    
+    # Indicadores para o frontend
+    response_data["ui_hints"] = {
+        "show_escalation_option": response.escalation_needed,
+        "highlight_cta": response.conversation_type == "marketing",
+        "show_satisfaction_survey": response.conversation_type == "support"
+    }
+    
+    return response_data
+
+def _format_error_response(result: Dict[str, Any], user_msg: str, session_id: Optional[str]) -> Dict[str, Any]:
+    """Formata resposta de erro com fallback amigável"""
+    
+    response_data = {
+        "success": False,
+        "reply": "Desculpe, estou enfrentando dificuldades técnicas no momento. "
+                "Nossa equipe foi notificada e entrará em contato em breve. "
+                "Para urgências, você pode usar nosso chat de suporte direto.",
+        "error_type": "processing_error",
+        "timestamp": datetime.utcnow().isoformat(),
+        "suggested_actions": [
+            "Tente reformular sua pergunta",
+            "Acesse nossa documentação",
+            "Entre em contato com suporte direto"
+        ]
+    }
+    
+    if session_id:
+        response_data["session_id"] = session_id
+    
+    # Se temos uma resposta de fallback do agente, use ela
+    if "response" in result and result["response"]:
+        response_data["reply"] = result["response"].content
+        response_data["suggested_actions"] = result["response"].next_steps or response_data["suggested_actions"]
+    
+    return response_data
+
+
+def save_message_to_firebase(session_id, role, content):
+    """
+    Salva uma mensagem no Firebase Realtime Database.
+    Estrutura: /conversations/<session_id>/messages
+    """
+    ref = db.reference(f"conversations/{session_id}/messages", app=app_1)
+    new_msg = {
+        "role": role,            # "user" ou "assistant"
+        "content": content,
+        "timestamp": int(time.time())
+    }
+    ref.push(new_msg)
+
 @app.route('/api/Media_Cuts_Studio/AgentAlfred', methods=['POST'])
 def api_AgentAlfred():
     pass
+
+@app.route("/api/chat-assistant", methods=["POST"])
+def chat_assistant():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "JSON payload required"}), 400
+
+        user_msg = data.get("message", "").strip()
+        if not user_msg:
+            return jsonify({"success": False, "error": "Message field is required"}), 400
+        logger.info(f"REQ  ")
+        user_context = data.get("user_context", {})
+        conversation_history = data.get("conversation_history", [])
+        session_id = data.get("session_id") or str(uuid.uuid4())  # garante um id
+        enable_analytics = data.get("enable_analytics", True)
+        model = data.get("model", "gpt-5-nano")
+
+        # Log input do usuário no Firebase
+        save_message_to_firebase(session_id, "user", user_msg)
+
+        enriched_context = _enrich_user_context(user_context, request)
+
+        UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "storage")
+        result = asyncio.run(CustomerChatAgent(
+            content_user=user_msg,
+            UPLOAD_FOLDER=UPLOAD_FOLDER,
+            user_context=enriched_context,
+            conversation_history=conversation_history,
+            model=model,
+            UPLOAD_URL=UPLOAD_URL_VIDEOMANAGER,
+            USER_ID=enriched_context.get("user_id", "anonymous"),
+            enable_analytics=enable_analytics
+        ))
+
+        if result["success"]:
+            response_data = _format_successful_response(result, session_id)
+            agent_output = result["response"].content  # resposta do agente
+            # Log output do assistente no Firebase
+            save_message_to_firebase(session_id, "assistant", agent_output)
+        else:
+            response_data = _format_error_response(result, user_msg, session_id)
+            save_message_to_firebase(session_id, "assistant", f"[ERRO] {result.get('error')}")
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        logger.error(f"Unexpected error in chat_assistant: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": "Ocorreu um erro interno. Nossa equipe foi notificada."
+        }), 500
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():

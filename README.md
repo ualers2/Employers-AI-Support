@@ -7,8 +7,7 @@
 
 ---
 # Problemas resolvidos
-- Suporte 24/7 
-- Pagar salario de 600 a 1200 R$ a um humano dedicado a dar suporte
+- 
 - Chat bots para gerenciamento de tickets
 - **Redução do Tempo de Resposta:** O suporte humano, mesmo que 24/7, pode ter gargalos no tempo de resposta, especialmente em picos de demanda. Seu agente resolve isso ao fornecer **respostas instantâneas e consistentes**, eliminando filas e esperas.
 * **Padronização e Qualidade do Atendimento:** A resposta humana pode variar de acordo com o operador. Um agente de IA garante **respostas padronizadas e de alta qualidade**, baseadas em sua base de conhecimento, eliminando erros ou inconsistências.

@@ -1,0 +1,36 @@
+2025-09-05 09:37:46,760 - INFO - Tentando enviar 'E:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\Docs\Support\Perguntas Frequentes.md' para None...
+2025-09-05 09:37:46,760 - INFO - Com metadados: {
+  "projectName": "support",
+  "type_project": "files"
+}
+2025-09-05 09:37:46,771 - INFO - Ocorreu um erro inesperado: Invalid URL 'None/api/upload-video': No scheme supplied. Perhaps you meant https://None/api/upload-video?
+2025-09-05 09:38:25,007 - INFO - Tentando enviar 'E:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\Docs\Support\Perguntas Frequentes.md' para https://videomanager.api.mediacutsstudio.com...
+2025-09-05 09:38:25,010 - INFO - Com metadados: {
+  "projectName": "support",
+  "type_project": "files"
+}
+2025-09-05 09:38:25,918 - INFO - 
+Upload bem-sucedido!
+2025-09-05 09:38:25,919 - INFO - Resposta do servidor:
+2025-09-05 09:38:25,919 - INFO - {
+  "filename": "Perguntas_Frequentes.md",
+  "message": "V\u00eddeo e metadados enviados com sucesso!",
+  "project_name": "support",
+  "video_id": "7c46cb7e-6b3f-4e1c-8d81-0856caf6c492"
+}
+2025-09-05 09:38:25,920 - INFO - ID: 7c46cb7e-6b3f-4e1c-8d81-0856caf6c492
+2025-09-05 09:39:07,025 - INFO - Tentando enviar 'E:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\Docs\Support\Informações Técnicas.md' para https://videomanager.api.mediacutsstudio.com...
+2025-09-05 09:39:07,026 - INFO - Com metadados: {
+  "projectName": "support",
+  "type_project": "files"
+}
+2025-09-05 09:39:07,762 - INFO - 
+Upload bem-sucedido!
+2025-09-05 09:39:07,763 - INFO - Resposta do servidor:
+2025-09-05 09:39:07,763 - INFO - {
+  "filename": "Informacoes_Tecnicas.md",
+  "message": "V\u00eddeo e metadados enviados com sucesso!",
+  "project_name": "support",
+  "video_id": "9d5a06f4-76f9-4920-8ba2-dcd20e29f5bc"
+}
+2025-09-05 09:39:07,765 - INFO - ID: 9d5a06f4-76f9-4920-8ba2-dcd20e29f5bc
