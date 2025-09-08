@@ -18,6 +18,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import time
 
+
 from ClienteChat.ai import CustomerChatAgent
 from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Models.postgressSQL import db as db_postgress, User
@@ -56,7 +57,7 @@ last_alfred_heartbeat = datetime.now(timezone.utc)
 # Configuração do banco PostgreSQL
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@db:5432/meubanco"
+    "postgresql://postgres:postgres@meu_postgres:5432/meubanco"
 )
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
