@@ -1,28 +1,17 @@
 import os
 import logging
-import re
+import uuid
 import json
 import asyncio
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
-import uuid
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from agents import Agent, Runner
-from pydantic import BaseModel
 from typing import List, Dict
-# from Alfred import Alfred # Uncomment if Alfred is used
 from modules.Keys.Firebase.FirebaseApp import init_firebase
-import firebase_admin
 from firebase_admin import db
 from datetime import datetime, timedelta, timezone
 from docker import DockerClient, errors
 import docker 
-
 import asyncio
 import logging
 from flask import request, jsonify
@@ -30,10 +19,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import time
 
-
-# Import da versão ultra melhorada
 from ClienteChat.ai import CustomerChatAgent
-
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -42,13 +28,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "modules", 'Keys', 'keys.env'))
 
-
 try:
-    # Cliente Docker global
     client = DockerClient(base_url='unix://var/run/docker.sock')
 except docker.errors.DockerException as e:
     logger.warning(f"Não foi possível conectar ao Docker: {e}")
-    client = None  # ou algum stub
+    client = None 
 
 app_1 = init_firebase()
 db_ref = db.reference('configurations', app=app_1) 
@@ -60,8 +44,6 @@ WhatsApp_status_ref = db.reference('alfred_status/WhatsApp', app=app_1)
 alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
 
 UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
-
-
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'alfred_knowledge')
 if not os.path.exists(UPLOAD_FOLDER):
@@ -69,139 +51,6 @@ if not os.path.exists(UPLOAD_FOLDER):
     logger.info(f"Created upload directory: {UPLOAD_FOLDER}")
 METADATA_FILE_PATH = os.path.join(UPLOAD_FOLDER, 'alfred_files_metadata.json')
 last_alfred_heartbeat = datetime.now(timezone.utc)
-async def AgentAlfred():
-    pass
-    # Alfred_instance = Alfred(
-    #     TelegramTOKEN,
-    #     CHANNEL_ID
-    # )
-
-    # return resultados  # <-- retorna a lista com 3 dicts
-
-
-def _enrich_user_context(user_context: Dict[str, Any], request_obj) -> Dict[str, Any]:
-    """Enriquece o contexto do usuário com informações da requisição"""
-    
-    enriched = user_context.copy()
-    
-    # Adiciona timestamp
-    enriched["timestamp"] = datetime.utcnow().isoformat()
-    
-    # Informações da requisição (se necessário para analytics)
-    enriched["request_info"] = {
-        "user_agent": request_obj.headers.get("User-Agent", ""),
-        "ip": request_obj.environ.get("HTTP_X_FORWARDED_FOR", request_obj.remote_addr),
-        "referer": request_obj.headers.get("Referer", "")
-    }
-    
-    # Define user_id se não fornecido
-    if not enriched.get("user_id"):
-        enriched["user_id"] = f"anonymous_{hash(enriched['request_info']['ip']) % 10000}"
-    
-    # Inferências básicas se dados não fornecidos
-    if not enriched.get("user_type"):
-        enriched["user_type"] = "prospect"  # Default para visitantes da landing page
-    
-    return enriched
-
-def _format_successful_response(result: Dict[str, Any], session_id: Optional[str]) -> Dict[str, Any]:
-    """Formata resposta de sucesso com dados estruturados"""
-    
-    response = result["response"]
-    analytics = result.get("analytics")
-    
-    # Resposta base
-    response_data = {
-        "success": True,
-        "reply": response.content,
-        "metadata": {
-            "conversation_type": response.conversation_type,
-            "user_intent": response.user_intent,
-            "response_tone": response.response_tone,
-            "escalation_needed": response.escalation_needed,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    }
-    
-    # Adiciona session_id se fornecido
-    if session_id:
-        response_data["session_id"] = session_id
-    
-    # Próximos passos sugeridos
-    if response.next_steps:
-        response_data["suggested_actions"] = response.next_steps
-    
-    # Sugestões de follow-up
-    if response.follow_up_suggestions:
-        response_data["follow_up_suggestions"] = response.follow_up_suggestions
-    
-    # Analytics (se habilitado e disponível)
-    if analytics:
-        response_data["analytics"] = {
-            "satisfaction_score": analytics.user_satisfaction_score,
-            "key_topics": analytics.key_topics,
-            "conversation_summary": analytics.conversation_summary
-        }
-        
-        # Oportunidades de marketing (apenas para uso interno)
-        if analytics.marketing_opportunities:
-            response_data["internal"] = {
-                "marketing_opportunities": analytics.marketing_opportunities
-            }
-    
-    # Indicadores para o frontend
-    response_data["ui_hints"] = {
-        "show_escalation_option": response.escalation_needed,
-        "highlight_cta": response.conversation_type == "marketing",
-        "show_satisfaction_survey": response.conversation_type == "support"
-    }
-    
-    return response_data
-
-def _format_error_response(result: Dict[str, Any], user_msg: str, session_id: Optional[str]) -> Dict[str, Any]:
-    """Formata resposta de erro com fallback amigável"""
-    
-    response_data = {
-        "success": False,
-        "reply": "Desculpe, estou enfrentando dificuldades técnicas no momento. "
-                "Nossa equipe foi notificada e entrará em contato em breve. "
-                "Para urgências, você pode usar nosso chat de suporte direto.",
-        "error_type": "processing_error",
-        "timestamp": datetime.utcnow().isoformat(),
-        "suggested_actions": [
-            "Tente reformular sua pergunta",
-            "Acesse nossa documentação",
-            "Entre em contato com suporte direto"
-        ]
-    }
-    
-    if session_id:
-        response_data["session_id"] = session_id
-    
-    # Se temos uma resposta de fallback do agente, use ela
-    if "response" in result and result["response"]:
-        response_data["reply"] = result["response"].content
-        response_data["suggested_actions"] = result["response"].next_steps or response_data["suggested_actions"]
-    
-    return response_data
-
-
-def save_message_to_firebase(session_id, role, content):
-    """
-    Salva uma mensagem no Firebase Realtime Database.
-    Estrutura: /conversations/<session_id>/messages
-    """
-    ref = db.reference(f"conversations/{session_id}/messages", app=app_1)
-    new_msg = {
-        "role": role,            # "user" ou "assistant"
-        "content": content,
-        "timestamp": int(time.time())
-    }
-    ref.push(new_msg)
-
-@app.route('/api/Media_Cuts_Studio/AgentAlfred', methods=['POST'])
-def api_AgentAlfred():
-    pass
 
 @app.route("/api/chat-assistant", methods=["POST"])
 def chat_assistant():
@@ -1493,6 +1342,8 @@ def clear_activities():
         logger.error(f"Error clearing activities: {e}")
         return jsonify({"error": "Erro no servidor ao limpar o log de atividades."}), 500
 
+
+
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
     """
@@ -1771,8 +1622,254 @@ def get_alfred_status():
         "details": details
     }), 200
 
+@app.route('/api/agents/initialize', methods=['POST'], strict_slashes=False)
+def initialize_agent():
+    """
+    Inicializa um novo agente (Discord, Telegram ou whatsapp) buscando a image_name
+    diretamente das referências de status no Firebase.
+    Requer: platform (discord/telegram/whatsapp). agentConfigId não é mais necessário.
+    """
+    data = request.get_json()
+    platform = data.get('platform')
+    logger.info(data)
+    if not platform:
+        return jsonify({"message": "Platform é obrigatório."}), 400
 
-# --- Funções Auxiliares para Interação com Docker ---
+    if platform not in ['discord', 'telegram']:
+        return jsonify({"message": "Plataforma inválida. Use 'discord' ou 'telegram'."}), 400
+
+    try:
+        container_name = f"alfred-{platform}-agent"
+
+        success, message = _start_docker_container(container_name)
+
+        if success:
+            return jsonify({"message": message, "status": "initializing"}), 200
+        else:
+            return jsonify({"message": message, "status": "failed"}), 500
+
+    except Exception as e:
+        print(f"Erro ao inicializar agente {platform}: {e}")
+        return jsonify({"message": f"Erro interno ao inicializar agente: {e}"}), 500
+
+@app.route('/api/agents/<platform>/reset', methods=['POST'])
+def reset_agent(platform):
+    """
+    Reinicia o contêiner Docker de um agente específico.
+    Busca a image_name diretamente das referências de status no Firebase.
+    """
+
+    container_name = f"alfred-{platform}-agent"
+
+    try:
+        # Para e remove o container existente
+        stop_success, stop_message = _stop_docker_container(container_name)
+        # remove_success, remove_message = _remove_docker_container(container_name)
+
+        if not stop_success and "não encontrado" not in stop_message:
+            return jsonify({"message": f"Erro ao tentar reiniciar (parar): {stop_message}"}), 500
+  
+        # Inicia um novo container
+        start_success, start_message = _start_docker_container(container_name)
+        if start_success:
+            return jsonify({"message": f"Agente {platform} reiniciado com sucesso. {start_message}", "status": "restarting"}), 200
+        else:
+            return jsonify({"message": f"Falha ao reiniciar agente {platform}: {start_message}", "status": "failed"}), 500
+
+    except Exception as e:
+        print(f"Erro ao reiniciar agente {platform}: {e}")
+        return jsonify({"message": f"Erro interno ao reiniciar agente: {e}"}), 500
+
+@app.route('/api/agents/<platform>/pause', methods=['POST'])
+def pause_agent(platform):
+    """
+    Pausa ou despausa o contêiner Docker de um agente específico.
+    """
+
+    container_name = f"alfred-{platform}-agent"
+
+    try:
+        if not client:
+            raise Exception("Docker client não está disponível.")
+        container = client.containers.get(container_name)
+        if container.status == 'paused':
+            container.unpause()
+            return jsonify({"message": f"Agente {platform} despausado com sucesso.", "status": "running"}), 200
+        else:
+            container.pause()
+            return jsonify({"message": f"Agente {platform} pausado com sucesso.", "status": "paused"}), 200
+    except docker.errors.NotFound:
+        return jsonify({"message": f"Container '{container_name}' não encontrado para pausar/despausar."}), 404
+    except docker.errors.APIError as e:
+        return jsonify({"message": f"Erro na API Docker ao pausar/despausar {container_name}: {e}"}), 500
+    except Exception as e:
+        print(f"Erro ao pausar/despausar agente {platform}: {e}")
+        return jsonify({"message": f"Erro interno ao pausar/despausar agente: {e}"}), 500
+
+@app.route('/api/agents/<platform>/delete', methods=['DELETE'])
+def delete_agent(platform):
+    """
+    Deleta o contêiner Docker de um agente específico.
+    """
+    container_name = f"alfred-{platform}-agent"
+
+    success, message = _remove_docker_container(container_name)
+
+    if success:
+        return jsonify({"message": message, "status": "deleted"}), 200
+    else:
+        # Se não for encontrado, ainda é um "sucesso" em termos de que não está mais lá
+        if "não encontrado" in message:
+            return jsonify({"message": f"Container '{container_name}' já não existe ou não foi encontrado. {message}", "status": "not_found"}), 200
+        return jsonify({"message": message, "status": "failed"}), 500
+
+@app.route('/callback')
+def oauth_callback():
+    # 1) Pega o código que o provedor OAuth enviou
+    code = request.args.get('code')
+    if not code:
+        return "Erro: nenhum código recebido", 400
+
+    # 2) Troca o code por token
+    token_response = trocar_code_por_token(code)
+    access_token = token_response.get('access_token')
+
+    # 3) Armazene/processar o access_token como precisar
+    #    (por exemplo, salvar na sessão ou no banco)
+
+    return "Autenticação concluída com sucesso! Feche esta janela."
+
+def trocar_code_por_token(code):
+    import requests
+    data = {
+        'client_id':      os.getenv("ClientID_discord"),
+        'client_secret':  os.getenv("ClientSecret_discord"),
+        'grant_type':     'authorization_code',
+        'code':           code,
+        'redirect_uri':   'http://localhost:8080/callback'
+    }
+    resp = requests.post('https://discord.com/api/oauth2/token', data=data)
+    return resp.json()
+
+def _enrich_user_context(user_context: Dict[str, Any], request_obj) -> Dict[str, Any]:
+    """Enriquece o contexto do usuário com informações da requisição"""
+    
+    enriched = user_context.copy()
+    
+    # Adiciona timestamp
+    enriched["timestamp"] = datetime.utcnow().isoformat()
+    
+    # Informações da requisição (se necessário para analytics)
+    enriched["request_info"] = {
+        "user_agent": request_obj.headers.get("User-Agent", ""),
+        "ip": request_obj.environ.get("HTTP_X_FORWARDED_FOR", request_obj.remote_addr),
+        "referer": request_obj.headers.get("Referer", "")
+    }
+    
+    # Define user_id se não fornecido
+    if not enriched.get("user_id"):
+        enriched["user_id"] = f"anonymous_{hash(enriched['request_info']['ip']) % 10000}"
+    
+    # Inferências básicas se dados não fornecidos
+    if not enriched.get("user_type"):
+        enriched["user_type"] = "prospect"  # Default para visitantes da landing page
+    
+    return enriched
+
+def _format_successful_response(result: Dict[str, Any], session_id: Optional[str]) -> Dict[str, Any]:
+    """Formata resposta de sucesso com dados estruturados"""
+    
+    response = result["response"]
+    analytics = result.get("analytics")
+    
+    # Resposta base
+    response_data = {
+        "success": True,
+        "reply": response.content,
+        "metadata": {
+            "conversation_type": response.conversation_type,
+            "user_intent": response.user_intent,
+            "response_tone": response.response_tone,
+            "escalation_needed": response.escalation_needed,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    }
+    
+    # Adiciona session_id se fornecido
+    if session_id:
+        response_data["session_id"] = session_id
+    
+    # Próximos passos sugeridos
+    if response.next_steps:
+        response_data["suggested_actions"] = response.next_steps
+    
+    # Sugestões de follow-up
+    if response.follow_up_suggestions:
+        response_data["follow_up_suggestions"] = response.follow_up_suggestions
+    
+    # Analytics (se habilitado e disponível)
+    if analytics:
+        response_data["analytics"] = {
+            "satisfaction_score": analytics.user_satisfaction_score,
+            "key_topics": analytics.key_topics,
+            "conversation_summary": analytics.conversation_summary
+        }
+        
+        # Oportunidades de marketing (apenas para uso interno)
+        if analytics.marketing_opportunities:
+            response_data["internal"] = {
+                "marketing_opportunities": analytics.marketing_opportunities
+            }
+    
+    # Indicadores para o frontend
+    response_data["ui_hints"] = {
+        "show_escalation_option": response.escalation_needed,
+        "highlight_cta": response.conversation_type == "marketing",
+        "show_satisfaction_survey": response.conversation_type == "support"
+    }
+    
+    return response_data
+
+def _format_error_response(result: Dict[str, Any], user_msg: str, session_id: Optional[str]) -> Dict[str, Any]:
+    """Formata resposta de erro com fallback amigável"""
+    
+    response_data = {
+        "success": False,
+        "reply": "Desculpe, estou enfrentando dificuldades técnicas no momento. "
+                "Nossa equipe foi notificada e entrará em contato em breve. "
+                "Para urgências, você pode usar nosso chat de suporte direto.",
+        "error_type": "processing_error",
+        "timestamp": datetime.utcnow().isoformat(),
+        "suggested_actions": [
+            "Tente reformular sua pergunta",
+            "Acesse nossa documentação",
+            "Entre em contato com suporte direto"
+        ]
+    }
+    
+    if session_id:
+        response_data["session_id"] = session_id
+    
+    # Se temos uma resposta de fallback do agente, use ela
+    if "response" in result and result["response"]:
+        response_data["reply"] = result["response"].content
+        response_data["suggested_actions"] = result["response"].next_steps or response_data["suggested_actions"]
+    
+    return response_data
+
+def save_message_to_firebase(session_id, role, content):
+    """
+    Salva uma mensagem no Firebase Realtime Database.
+    Estrutura: /conversations/<session_id>/messages
+    """
+    ref = db.reference(f"conversations/{session_id}/messages", app=app_1)
+    new_msg = {
+        "role": role,            # "user" ou "assistant"
+        "content": content,
+        "timestamp": int(time.time())
+    }
+    ref.push(new_msg)
+
 def _start_docker_container(container_name: str):
     """
     Reinicia um container Docker pelo nome. Se não existir, retorna erro.
@@ -1829,113 +1926,6 @@ def _get_docker_container_status(container_name: str):
     except Exception as e:
         return "error", f"Erro ao obter status: {e}"
 
-# --- Endpoints ---
-
-@app.route('/api/agents/initialize', methods=['POST'], strict_slashes=False)
-def initialize_agent():
-    """
-    Inicializa um novo agente (Discord, Telegram ou whatsapp) buscando a image_name
-    diretamente das referências de status no Firebase.
-    Requer: platform (discord/telegram/whatsapp). agentConfigId não é mais necessário.
-    """
-    data = request.get_json()
-    platform = data.get('platform')
-    logger.info(data)
-    if not platform:
-        return jsonify({"message": "Platform é obrigatório."}), 400
-
-    if platform not in ['discord', 'telegram']:
-        return jsonify({"message": "Plataforma inválida. Use 'discord' ou 'telegram'."}), 400
-
-    try:
-        container_name = f"alfred-{platform}-agent"
-
-        success, message = _start_docker_container(container_name)
-
-        if success:
-            return jsonify({"message": message, "status": "initializing"}), 200
-        else:
-            return jsonify({"message": message, "status": "failed"}), 500
-
-    except Exception as e:
-        print(f"Erro ao inicializar agente {platform}: {e}")
-        return jsonify({"message": f"Erro interno ao inicializar agente: {e}"}), 500
-
-
-@app.route('/api/agents/<platform>/reset', methods=['POST'])
-def reset_agent(platform):
-    """
-    Reinicia o contêiner Docker de um agente específico.
-    Busca a image_name diretamente das referências de status no Firebase.
-    """
-
-    container_name = f"alfred-{platform}-agent"
-
-    try:
-        # Para e remove o container existente
-        stop_success, stop_message = _stop_docker_container(container_name)
-        # remove_success, remove_message = _remove_docker_container(container_name)
-
-        if not stop_success and "não encontrado" not in stop_message:
-            return jsonify({"message": f"Erro ao tentar reiniciar (parar): {stop_message}"}), 500
-  
-        # Inicia um novo container
-        start_success, start_message = _start_docker_container(container_name)
-        if start_success:
-            return jsonify({"message": f"Agente {platform} reiniciado com sucesso. {start_message}", "status": "restarting"}), 200
-        else:
-            return jsonify({"message": f"Falha ao reiniciar agente {platform}: {start_message}", "status": "failed"}), 500
-
-    except Exception as e:
-        print(f"Erro ao reiniciar agente {platform}: {e}")
-        return jsonify({"message": f"Erro interno ao reiniciar agente: {e}"}), 500
-
-
-@app.route('/api/agents/<platform>/pause', methods=['POST'])
-def pause_agent(platform):
-    """
-    Pausa ou despausa o contêiner Docker de um agente específico.
-    """
-
-    container_name = f"alfred-{platform}-agent"
-
-    try:
-        if not client:
-            raise Exception("Docker client não está disponível.")
-        container = client.containers.get(container_name)
-        if container.status == 'paused':
-            container.unpause()
-            return jsonify({"message": f"Agente {platform} despausado com sucesso.", "status": "running"}), 200
-        else:
-            container.pause()
-            return jsonify({"message": f"Agente {platform} pausado com sucesso.", "status": "paused"}), 200
-    except docker.errors.NotFound:
-        return jsonify({"message": f"Container '{container_name}' não encontrado para pausar/despausar."}), 404
-    except docker.errors.APIError as e:
-        return jsonify({"message": f"Erro na API Docker ao pausar/despausar {container_name}: {e}"}), 500
-    except Exception as e:
-        print(f"Erro ao pausar/despausar agente {platform}: {e}")
-        return jsonify({"message": f"Erro interno ao pausar/despausar agente: {e}"}), 500
-
-
-@app.route('/api/agents/<platform>/delete', methods=['DELETE'])
-def delete_agent(platform):
-    """
-    Deleta o contêiner Docker de um agente específico.
-    """
-    container_name = f"alfred-{platform}-agent"
-
-    success, message = _remove_docker_container(container_name)
-
-    if success:
-        return jsonify({"message": message, "status": "deleted"}), 200
-    else:
-        # Se não for encontrado, ainda é um "sucesso" em termos de que não está mais lá
-        if "não encontrado" in message:
-            return jsonify({"message": f"Container '{container_name}' já não existe ou não foi encontrado. {message}", "status": "not_found"}), 200
-        return jsonify({"message": message, "status": "failed"}), 500
-
-# Helper function to format file sizes (reused from upload endpoint)
 def format_bytes(size_bytes):
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -1944,7 +1934,6 @@ def format_bytes(size_bytes):
     else:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
 
-# Helper function to determine file type (basic example)
 def get_file_type(filename):
     ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
     if ext in {'md', 'txt'}:
@@ -2040,36 +2029,6 @@ def save_configurations():
     except Exception as e:
         logger.error(f"Error saving configurations: {e}")
         return jsonify({"error": "Erro ao salvar configurações."}), 500
-
-
-# Rota de callback: deve bater exatamente com o que está no Portal
-@app.route('/callback')
-def oauth_callback():
-    # 1) Pega o código que o provedor OAuth enviou
-    code = request.args.get('code')
-    if not code:
-        return "Erro: nenhum código recebido", 400
-
-    # 2) Troca o code por token
-    token_response = trocar_code_por_token(code)
-    access_token = token_response.get('access_token')
-
-    # 3) Armazene/processar o access_token como precisar
-    #    (por exemplo, salvar na sessão ou no banco)
-
-    return "Autenticação concluída com sucesso! Feche esta janela."
-
-def trocar_code_por_token(code):
-    import requests
-    data = {
-        'client_id':      os.getenv("ClientID_discord"),
-        'client_secret':  os.getenv("ClientSecret_discord"),
-        'grant_type':     'authorization_code',
-        'code':           code,
-        'redirect_uri':   'http://localhost:8080/callback'
-    }
-    resp = requests.post('https://discord.com/api/oauth2/token', data=data)
-    return resp.json()
 
 # Roda o app quando executado diretamente
 if __name__ == '__main__':
