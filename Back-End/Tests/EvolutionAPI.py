@@ -4,21 +4,22 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from fastapi import FastAPI, Request
-# IMPORT SoftwareAI Alfred e Firebase
-from Alfred import Alfred
-from modules.Keys.Firebase.FirebaseApp import init_firebase
 import firebase_admin
 from firebase_admin import db
-#########################################
 from dotenv import load_dotenv, find_dotenv
-from modules.Keys.Firebase.FirebaseApp import init_firebase
 import firebase_admin
 from firebase_admin import db
 from datetime import datetime, timedelta, timezone
 
 
+from AssistantSupport.ai import Alfred
+from Keys.Firebase.FirebaseApp import init_firebase
+from Modules.Loggers.logger import setup_logger 
+
+
+log = setup_logger("EvolutionAPI", "EvolutionAPI.log")
 app_1 = init_firebase()
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'modules', 'Keys', 'keys.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'Keys', 'keys.env'))
 
 class WhatsAppEvolution:
     """
@@ -101,7 +102,7 @@ class WhatsAppEvolution:
         }
         # Usa push() para criar um ID único para cada mensagem dentro da interação
         self.messages_db_ref.child(interaction_id).child('messages').push(message_data)
-        print(f"Mensagem de '{sender_type}' salva na interação '{interaction_id}'")
+        log.info(f"Mensagem de '{sender_type}' salva na interação '{interaction_id}'")
 
     def _update_interaction_status(self, interaction_id, new_status):
         """
@@ -114,7 +115,7 @@ class WhatsAppEvolution:
             "status": new_status,
             "last_activity": datetime.now(timezone.utc).isoformat() # Opcional: para saber a última vez que a interação foi atualizada
         })
-        print(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
+        log.info(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
 
 
     async def send_text_to_group(self, text: str, mentions_everyone: bool=False) -> dict:
@@ -144,6 +145,6 @@ class WhatsAppEvolution:
         }
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
-        print(response.json())
+        log.info(f"response: {response.json()}")
 
         return response.json()

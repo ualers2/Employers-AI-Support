@@ -7,7 +7,6 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from typing import List, Dict
-from modules.Keys.Firebase.FirebaseApp import init_firebase
 from firebase_admin import db
 from datetime import datetime, timedelta, timezone
 from docker import DockerClient, errors
@@ -20,13 +19,15 @@ from datetime import datetime
 import time
 
 from ClienteChat.ai import CustomerChatAgent
+from Keys.Firebase.FirebaseApp import init_firebase
+from Modules.Models import db as db_postgress, User
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "modules", 'Keys', 'keys.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),'Keys', 'keys.env'))
 
 try:
     client = DockerClient(base_url='unix://var/run/docker.sock')
@@ -45,12 +46,65 @@ alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
 
 UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'alfred_knowledge')
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'Knowledge')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
     logger.info(f"Created upload directory: {UPLOAD_FOLDER}")
 METADATA_FILE_PATH = os.path.join(UPLOAD_FOLDER, 'alfred_files_metadata.json')
 last_alfred_heartbeat = datetime.now(timezone.utc)
+
+# Configuração do banco PostgreSQL
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@db:5432/meubanco"  # db = nome do serviço no compose
+)
+
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db_postgress.init_app(app)
+
+with app.app_context():
+    db_postgress.create_all()  # cria tabelas se não existirem
+
+
+# Endpoint para criar login (cadastro)
+@app.route("/create-login", methods=["POST"])
+def create_login():
+    data = request.get_json()
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"error": "Email e senha são obrigatórios"}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({"error": "Usuário já existe"}), 400
+
+    new_user = User(email=email)
+    new_user.set_password(password)
+
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({"message": "Usuário criado com sucesso"}), 201
+
+
+# Endpoint para login
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+
+    email = data.get("email")
+    password = data.get("password")
+
+    user = User.query.filter_by(email=email).first()
+
+    if not user or not user.check_password(password):
+        return jsonify({"error": "Credenciais inválidas"}), 401
+
+    return jsonify({"message": f"Bem-vindo, {user.email}!"}), 200
+
 
 @app.route("/api/chat-assistant", methods=["POST"])
 def chat_assistant():
