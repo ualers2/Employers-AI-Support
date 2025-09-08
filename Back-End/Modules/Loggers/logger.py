@@ -1,3 +1,4 @@
+import os
 import logging
 
 def setup_logger(name: str, log_file: str = None, level=logging.INFO):
@@ -22,7 +23,7 @@ def setup_logger(name: str, log_file: str = None, level=logging.INFO):
 
     # File handler opcional
     if log_file:
-        fh = logging.FileHandler(log_file)
+        fh = logging.FileHandler(os.path.join(os.path.dirname(__file__), '../', '../', 'Logs', log_file))
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 

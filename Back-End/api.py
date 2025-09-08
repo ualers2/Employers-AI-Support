@@ -20,7 +20,7 @@ import time
 
 from ClienteChat.ai import CustomerChatAgent
 from Keys.Firebase.FirebaseApp import init_firebase
-from Modules.Models import db as db_postgress, User
+from Modules.Models.postgressSQL import db as db_postgress, User
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
