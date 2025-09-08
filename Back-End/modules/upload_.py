@@ -79,9 +79,3 @@ def upload_(name_project, VIDEO_FILE_PATH, USER_ID_FOR_TEST):
         logger.info("Certifique-se de que o backend Flask está rodando em 'http://localhost:5000'.")
     except Exception as e:
         logger.info(f"Ocorreu um erro inesperado: {e}")
-
-if __name__ == '__main__':
-    save_path = r"E:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\Docs\Limitações de Conta do Usuário.md"
-    PROJECT_NAME = "support"
-    file_id = upload_(PROJECT_NAME, save_path, "freitasalexandre810@gmail_com")
-    print(file_id)

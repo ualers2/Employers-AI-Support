@@ -34,11 +34,3 @@ def download_(UPLOAD_URL, save_path, PROJECT_NAME, VIDEO_ID, USER_ID_FOR_TEST) -
         raise RuntimeError(f"Falha ao baixar vídeo: {e}") from e
 
     return save_path
-
-if __name__ == '__main__':
-    UPLOAD_URL = "https://videomanager.api.mediacutsstudio.com"
-    USER_ID_FOR_TEST = "freitasalexandre810@gmail.com"
-    save_path = r"C:\Users\Media Cuts DeV\Downloads\HomeServer\HomeServer\internalsheduleserver\Internal-server\Modules\token.pickle"
-    PROJECT_NAME = "cortesdofelquinhasss"
-    VIDEO_ID = "04120ccf-8098-4388-b01f-76179beec198"
-    download_(UPLOAD_URL, save_path, PROJECT_NAME, VIDEO_ID, USER_ID_FOR_TEST)
