@@ -56,7 +56,7 @@ last_alfred_heartbeat = datetime.now(timezone.utc)
 # Configuração do banco PostgreSQL
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@db:5432/meubanco"  # db = nome do serviço no compose
+    "postgresql://postgres:postgres@db:5432/meubanco"
 )
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
