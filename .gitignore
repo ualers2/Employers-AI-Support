@@ -1,3 +1,6 @@
-Back-End/modules/Keys/
+
 Front-End/node_modules/
+Back-End/Keys/keys.env
+Back-End/Keys/Firebase/FirebaseApp.py
+Back-End/Keys/
 **__pycache__

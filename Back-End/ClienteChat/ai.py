@@ -11,8 +11,8 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
-from modules.upload_ import upload_
-from modules.download_ import download_
+from Modules.FileServer.upload_ import upload_
+from Modules.FileServer.download_ import download_
 
 
 # Configuração de logging

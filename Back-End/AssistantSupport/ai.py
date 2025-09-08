@@ -1,19 +1,17 @@
 
-from agents import Agent, handoff, RunContextWrapper
+from agents import Agent, handoff, RunContextWrapper, Runner
 import requests
 from dotenv import load_dotenv, find_dotenv
 import os
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from pydantic import BaseModel
-
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'modules', 'Keys', 'keys.env'))
-
-from modules.modules import *
+import logging
+from firebase_admin import db
 
 
-# # import pygetwindow as gw
-from huggingface_hub import InferenceClient
-from huggingface_hub import login
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 class Alfred:
     """
@@ -43,8 +41,9 @@ class Alfred:
         self.logger.info(self.model_selectAlfred)
         self.logger.info(self.instruction_db)
 
+        load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../', 'Keys', 'keys.env'))
 
-        
+                
 
     def get_alfred_local_file_paths(self):
         """

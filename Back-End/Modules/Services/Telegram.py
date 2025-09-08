@@ -6,17 +6,21 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import os
-# IMPORT SoftwareAI Alfred
-from Alfred import Alfred
-#########################################
+
 from dotenv import load_dotenv, find_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'modules', 'Keys', 'keys.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),  'Keys', 'keys.env'))
 os.chdir(os.path.join(os.path.dirname(__file__)))
-from modules.Keys.Firebase.FirebaseApp import init_firebase
 import firebase_admin
 from firebase_admin import db
 from datetime import datetime, timedelta, timezone
 
+
+from AssistantSupport.ai import Alfred
+from Keys.Firebase.FirebaseApp import init_firebase
+from Modules.Loggers.logger import setup_logger 
+
+
+log = setup_logger("Telegram", "Telegram.log")
 
 app_1 = init_firebase()
 telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)
@@ -44,51 +48,9 @@ class Telegram:
             "image_name": "telegram-server:latest",
             "container_name": "alfred-telegram-agent"
         })
-
-    def _get_user_info(self, telegram_user):
-        """Extrai informações do usuário do objeto do Telegram."""
-        return {
-            "id": str(telegram_user.id),
-            "name": telegram_user.full_name or telegram_user.first_name or f"User {telegram_user.id}",
-            "username": telegram_user.username,
-            "platform": "Telegram"
-        }
-
-    def _save_message_to_firebase(self, interaction_id, sender_type, content):
-        """
-        Salva uma mensagem no Firebase para uma interação específica.
-        Args:
-            interaction_id (str): O ID da interação (conversation).
-            sender_type (str): 'user' ou 'Alfred'.
-            content (str): O texto da mensagem.
-        """
-        timestamp = datetime.now(timezone.utc).isoformat()
-        message_data = {
-            "sender": sender_type,
-            "content": content,
-            "timestamp": timestamp
-        }
-        # Usa push() para criar um ID único para cada mensagem dentro da interação
-        messages_db_ref.child(interaction_id).child('messages').push(message_data)
-        print(f"Mensagem de '{sender_type}' salva na interação '{interaction_id}'")
-
-    def _update_interaction_status(self, interaction_id, new_status):
-        """
-        Atualiza o status de uma interação.
-        Args:
-            interaction_id (str): O ID da interação.
-            new_status (str): Novo status ('pending', 'responded', 'resolved').
-        """
-        messages_db_ref.child(interaction_id).update({
-            "status": new_status,
-            "last_activity": datetime.now(timezone.utc).isoformat() # Opcional: para saber a última vez que a interação foi atualizada
-        })
-        print(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
-
-
+        
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('Olá! Como posso ajudar você hoje?')
-
 
     async def reply_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         telegram_message = update.message
@@ -107,14 +69,13 @@ class Telegram:
             })
             interaction_id = new_interaction_ref.key
             self.active_interactions[chat_id] = interaction_id
-            print(f"Nova interação criada: {interaction_id} para chat {chat_id}")
+            log.info(f"Nova interação criada: {interaction_id} para chat {chat_id}")
             self._update_interaction_status(interaction_id, "pending")
 
         self._save_message_to_firebase(interaction_id, "user", user_text)
         Alfredclass = Alfred(app_1)
         self.Alfred = Alfredclass.Alfred
         Alfred_response = await self.Alfred(user_text)
-        print(Alfred_response)
 
         # if Deletemessage:
         #     try:
@@ -123,7 +84,7 @@ class Telegram:
         #         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
         #     except Exception as e:
         #         print(f"Erro ao tentar deletar a mensagem: {e}")
-        print(f"Resposta do Alfred: {Alfred_response}")
+        log.info(f"Resposta do Alfred: {Alfred_response}")
 
         self._save_message_to_firebase(interaction_id, "Alfred", Alfred_response)
 
@@ -152,14 +113,13 @@ class Telegram:
                 })
                 interaction_id = new_interaction_ref.key
                 self.active_interactions[chat_id] = interaction_id
-                print(f"Nova interação criada: {interaction_id} para chat {chat_id}")
+                log.info(f"Nova interação criada: {interaction_id} para chat {chat_id}")
                 self._update_interaction_status(interaction_id, "pending")
 
             self._save_message_to_firebase(interaction_id, "user", user_text)
             Alfredclass = Alfred(app_1)
             self.Alfred = Alfredclass.Alfred
             Alfred_response = await self.Alfred(user_text)
-            print(Alfred_response)
 
             # if Deletemessage:
             #     try:
@@ -168,7 +128,7 @@ class Telegram:
             #         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             #     except Exception as e:
             #         print(f"Erro ao tentar deletar a mensagem: {e}")
-            print(f"Resposta do Alfred: {Alfred_response}")
+            log.info(f"Resposta do Alfred : {Alfred_response}")
 
             self._save_message_to_firebase(interaction_id, "Alfred", Alfred_response)
 
@@ -190,7 +150,48 @@ class Telegram:
             #         print(f"Erro ao tentar banir o usuário {user_id}: {e}")
 
             await context.bot.send_message(chat_id=chat_id, text=Alfred_response)
-            
+
+    def _get_user_info(self, telegram_user):
+        """Extrai informações do usuário do objeto do Telegram."""
+        return {
+            "id": str(telegram_user.id),
+            "name": telegram_user.full_name or telegram_user.first_name or f"User {telegram_user.id}",
+            "username": telegram_user.username,
+            "platform": "Telegram"
+        }
+
+    def _save_message_to_firebase(self, interaction_id, sender_type, content):
+        """
+        Salva uma mensagem no Firebase para uma interação específica.
+        Args:
+            interaction_id (str): O ID da interação (conversation).
+            sender_type (str): 'user' ou 'Alfred'.
+            content (str): O texto da mensagem.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        message_data = {
+            "sender": sender_type,
+            "content": content,
+            "timestamp": timestamp
+        }
+        # Usa push() para criar um ID único para cada mensagem dentro da interação
+        messages_db_ref.child(interaction_id).child('messages').push(message_data)
+        log.info(f"Mensagem de '{sender_type}' salva na interação '{interaction_id}'")
+
+    def _update_interaction_status(self, interaction_id, new_status):
+        """
+        Atualiza o status de uma interação.
+        Args:
+            interaction_id (str): O ID da interação.
+            new_status (str): Novo status ('pending', 'responded', 'resolved').
+        """
+        messages_db_ref.child(interaction_id).update({
+            "status": new_status,
+            "last_activity": datetime.now(timezone.utc).isoformat() # Opcional: para saber a última vez que a interação foi atualizada
+        })
+        log.info(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
+
+
     async def send_image_to_channel(self, image_path, caption=None):
         """
         Envia uma imagem para o canal.
@@ -203,35 +204,24 @@ class Telegram:
                 photo=image_path,
                 caption=caption
             )
-            print(f"Imagem enviada para o canal {self.CHANNEL_ID}.")
+            log.info(f"Imagem enviada para o canal {self.CHANNEL_ID}.")
         except Exception as e:
-            print(f"Erro ao enviar imagem para o canal: {e}")
+            log.info(f"Erro ao enviar imagem para o canal: {e}")
 
-    async def handle_task(self, image_path, caption):
-        """
-        Exemplo de função chamadora que envia a imagem.
-        """
-        await self.send_image_to_channel(image_path, caption)
 
 
     def main_telegram(self):
-        print("inicialized")
-        # Handler para o comando /start
+        log.info("inicialized")
         self.support_telegram.add_handler(CommandHandler("start", self.start))
-
-        # Handler para mensagens diretas
         self.support_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.reply_message))
-
-        # Handler para mensagens de canais
         self.support_telegram.add_handler(MessageHandler(filters.TEXT & filters.Chat(self.CHANNEL_ID), self.handle_channel_message))
-
-        self.support_telegram.run_polling()  # Telegram
+        self.support_telegram.run_polling()
 
 
 
 if __name__ == '__main__':
     data = configurations_db_ref.get()
-    TOKEN = data.get("botToken") # , os.getenv("TOKEN")
-    CHANNEL_ID =  data.get("channelId") # , os.getenv("CHANNEL_ID")
+    TOKEN = data.get("botToken") 
+    CHANNEL_ID =  data.get("channelId") 
     Telegram_instance = Telegram(TOKEN, CHANNEL_ID)
     Telegram_instance.main_telegram()
