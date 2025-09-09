@@ -197,9 +197,13 @@ def chat_assistant():
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
+    user_id = request.args.get("user_id") or (request.get_json() or {}).get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id obrigatório"}), 400
+
     if request.method == 'GET':
         try:
-            configs = Config.query.all()
+            configs = Config.query.filter_by(user_id=user_id).all()
             default = {
                 "botConfig": {},
                 "moderationConfig": {},
@@ -216,11 +220,11 @@ def handle_config():
         try:
             data = request.get_json() or {}
             for key, value in data.items():
-                config = Config.query.filter_by(key=key).first()
+                config = Config.query.filter_by(user_id=user_id, key=key).first()
                 if config:
                     config.value = value
                 else:
-                    config = Config(key=key, value=value)
+                    config = Config(user_id=user_id, key=key, value=value)
                     db_postgress.session.add(config)
             db_postgress.session.commit()
             return jsonify({"message": "Configurações salvas com sucesso!"}), 200
@@ -228,7 +232,7 @@ def handle_config():
             logger.exception(f"Error saving configurations: {e}")
             return jsonify({"error": "Erro ao salvar configurações."}), 500
         
-
+        
 @app.route('/api/alfred-files/upload', methods=['POST'])
 def upload_alfred_file():
     if 'file' not in request.files:
@@ -238,13 +242,17 @@ def upload_alfred_file():
     if not file or file.filename == '':
         return jsonify({"error": "Arquivo inválido."}), 400
 
+    # --- PEGAR USER_ID DO CONTEXTO ---
+    user_id = request.form.get('user_id')
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório."}), 400
+    
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+
     channel_id = request.form.get('channelId')
     caption = request.form.get('caption')
-
-    allowed_extensions = {'md', 'txt', 'pdf', 'docx', 'csv', 'json'}
-    file_extension = file.filename.rsplit('.', 1)[-1].lower()
-    if file_extension not in allowed_extensions:
-        return jsonify({"error": f"Formato de arquivo não permitido."}), 400
 
     try:
         unique_filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}_{file.filename}"
@@ -255,7 +263,7 @@ def upload_alfred_file():
         file_size_bytes = file_stats.st_size
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime)
 
-        # Salvar no PostgreSQL
+        # Salvar no PostgreSQL vinculado ao usuário
         alfred_file = AlfredFile(
             unique_filename=unique_filename,
             original_filename=file.filename,
@@ -265,7 +273,8 @@ def upload_alfred_file():
             last_modified_local=last_modified_timestamp,
             local_path=file_path,
             url_download=f"/api/alfred-files/download/{unique_filename}",
-            url_content=f"/api/alfred-files/{unique_filename}/content"
+            url_content=f"/api/alfred-files/{unique_filename}/content",
+            uploaded_by_user_id=user.id   # <<< vinculação ao usuário
         )
         db_postgress.session.add(alfred_file)
         db_postgress.session.commit()
@@ -275,22 +284,28 @@ def upload_alfred_file():
             "fileId": unique_filename,
             "fileName": file.filename,
             "size": format_bytes(file_size_bytes),
-            "lastModified": last_modified_timestamp.isoformat()
+            "lastModified": last_modified_timestamp.isoformat(),
+            "uploadedBy": user.email
         }), 200
 
     except Exception as e:
         logger.exception(f"Erro no upload do arquivo: {e}")
         return jsonify({"error": "Erro no servidor ao processar o upload."}), 500
 
+
 @app.route('/api/alfred-files', methods=['GET'])
 def list_alfred_files():
     """
-    Lista todos os arquivos Alfred com seus metadados do PostgreSQL.
+    Lista apenas os arquivos Alfred do usuário autenticado com seus metadados.
     """
     try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
+        alfred_files = AlfredFile.query.filter_by(uploaded_by_user_id=user_id).all()
         files_list = []
 
-        alfred_files = AlfredFile.query.all()
         for af in alfred_files:
             if not os.path.exists(af.local_path):
                 logger.warning(f"Arquivo '{af.unique_filename}' existe no DB mas não no disco. Pulando.")
@@ -318,34 +333,35 @@ def list_alfred_files():
 @app.route('/api/alfred-files/<string:fileId>/content', methods=['PUT'])
 def update_alfred_file_content(fileId):
     """
-    Atualiza o conteúdo de um arquivo Alfred no disco e os metadados no PostgreSQL.
+    Atualiza conteúdo de um arquivo Alfred apenas se pertence ao usuário.
     """
     try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
+        # Busca o arquivo do usuário
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
+
         data = request.get_json()
         if not data or 'content' not in data:
             return jsonify({"error": "'content' é obrigatório."}), 400
 
         new_content = data['content']
         if not isinstance(new_content, str):
-            return jsonify({"error": "'content' deve ser uma string."}), 400
+            return jsonify({"error": "'content' deve ser string."}), 400
 
-        # Busca o arquivo no PostgreSQL
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
-        if not alfred_file:
-            return jsonify({"error": "Arquivo não encontrado."}), 404
-
-        file_path = alfred_file.local_path
-        if not os.path.exists(file_path):
+        if not os.path.exists(alfred_file.local_path):
             return jsonify({"error": "Arquivo não existe no disco."}), 404
 
-        # Atualiza conteúdo local
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(alfred_file.local_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
-        file_stats = os.stat(file_path)
+        file_stats = os.stat(alfred_file.local_path)
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
 
-        # Atualiza metadados no PostgreSQL
         alfred_file.size_bytes = file_stats.st_size
         alfred_file.last_modified_local = last_modified_timestamp
         db_postgress.session.commit()
@@ -359,33 +375,35 @@ def update_alfred_file_content(fileId):
     except Exception as e:
         logger.exception(f"Erro ao atualizar conteúdo do arquivo {fileId}: {e}")
         return jsonify({"error": "Erro interno ao atualizar o arquivo."}), 500
-    
+        
 @app.route('/api/alfred-files/<string:fileId>/content', methods=['GET'])
 def get_alfred_file_content(fileId):
     """
-    Retorna o conteúdo de um arquivo Alfred e seus metadados do PostgreSQL.
+    Retorna conteúdo de um arquivo Alfred apenas se pertence ao usuário.
     """
     try:
-        # Busca no PostgreSQL
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
-        if not alfred_file:
-            return jsonify({"error": "Arquivo não encontrado."}), 404
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
 
-        file_path = alfred_file.local_path
-        if not os.path.exists(file_path):
+        # Busca o arquivo do usuário
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
+
+        if not os.path.exists(alfred_file.local_path):
             return jsonify({"error": "Arquivo não existe no disco."}), 404
 
-        # Somente extensões de texto podem ser lidas
-        file_extension = alfred_file.original_filename.rsplit('.', 1)[1].lower() if '.' in alfred_file.original_filename else ''
+        file_extension = alfred_file.original_filename.rsplit('.', 1)[-1].lower() if '.' in alfred_file.original_filename else ''
         allowed_readable_extensions = {'md', 'txt', 'csv', 'json'}
 
         if file_extension not in allowed_readable_extensions:
-            return jsonify({"error": "Visualização de conteúdo não suportada para este tipo de arquivo."}), 400
+            return jsonify({"error": "Visualização não suportada para este tipo de arquivo."}), 400
 
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(alfred_file.local_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        last_modified_timestamp = datetime.fromtimestamp(os.path.getmtime(file_path), tz=timezone.utc)
+        last_modified_timestamp = datetime.fromtimestamp(os.path.getmtime(alfred_file.local_path), tz=timezone.utc)
 
         return jsonify({
             "id": fileId,
@@ -397,22 +415,25 @@ def get_alfred_file_content(fileId):
     except Exception as e:
         logger.exception(f"Erro ao buscar conteúdo do arquivo {fileId}: {e}")
         return jsonify({"error": "Erro interno ao buscar o conteúdo do arquivo."}), 500
-    
+
 @app.route('/api/alfred-files/<string:fileId>/download', methods=['GET'])
 def download_alfred_file(fileId):
     """
-    Permite o download de um arquivo Alfred usando metadados do PostgreSQL.
+    Download de um arquivo Alfred, restrito ao usuário dono.
     """
     try:
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
-        if not alfred_file:
-            return jsonify({"error": "Arquivo não encontrado."}), 404
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
 
-        file_path = alfred_file.local_path
-        if not os.path.exists(file_path):
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
+
+        if not os.path.exists(alfred_file.local_path):
             return jsonify({"error": "Arquivo não encontrado no disco."}), 404
 
-        filename_on_disk = os.path.basename(file_path)
+        filename_on_disk = os.path.basename(alfred_file.local_path)
 
         return send_from_directory(
             UPLOAD_FOLDER,
@@ -428,44 +449,46 @@ def download_alfred_file(fileId):
 @app.route('/api/alfred-files/<string:fileId>', methods=['DELETE'])
 def delete_alfred_file(fileId):
     """
-    Remove um arquivo Alfred do disco e seus metadados do PostgreSQL.
+    Remove um arquivo Alfred apenas se pertence ao usuário do contexto.
     """
     try:
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
-        file_path = alfred_file.local_path if alfred_file else os.path.join(UPLOAD_FOLDER, fileId)
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
 
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
+
+        if os.path.exists(alfred_file.local_path):
+            os.remove(alfred_file.local_path)
             logger.info(f"Arquivo '{fileId}' excluído do disco.")
 
-        if alfred_file:
-            db_postgress.session.delete(alfred_file)
-            db_postgress.session.commit()
-            logger.info(f"Metadados do arquivo '{fileId}' removidos do PostgreSQL.")
+        db_postgress.session.delete(alfred_file)
+        db_postgress.session.commit()
 
         return jsonify({"message": "Arquivo excluído com sucesso."}), 200
 
     except Exception as e:
         logger.exception(f"Erro ao excluir arquivo {fileId}: {e}")
         return jsonify({"error": "Erro interno ao excluir o arquivo."}), 500
-
-
+    
 @app.route('/api/messages/recent', methods=['GET'])
 def list_recent_messages():
-    limit = request.args.get('limit', default=10, type=int)
-    status_filter = request.args.get('status')
-    after_id = request.args.get('after_id')
+    """
+    Lista interações recentes apenas do usuário autenticado.
+    """
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório."}), 400
 
-    # Buscar últimas mensagens por session_id
+    limit = request.args.get('limit', default=10, type=int)
+
     query = db.session.query(
         Message.session_id,
         func.max(Message.created_at).label('last_timestamp'),
         func.max(Message.id).label('last_message_id')
-    ).group_by(Message.session_id)
-
-    if status_filter:
-        # Aqui depende se você tem coluna de status na Message ou User
-        pass
+    ).filter_by(user_id=user_id).group_by(Message.session_id)
 
     query = query.order_by(desc('last_timestamp')).limit(limit)
     results = query.all()
@@ -480,16 +503,23 @@ def list_recent_messages():
             "userId": user.id if user else None,
             "message": last_message.content,
             "timestamp": last_message.created_at.isoformat(),
-            "status": "responded"  # Exemplo, você pode mapear de outra forma
+            "status": "responded"
         })
 
     return jsonify(interactions), 200
 
 @app.route('/api/messages/<string:session_id>', methods=['GET'])
 def get_interaction_details(session_id):
-    messages = Message.query.filter_by(session_id=session_id).order_by(Message.created_at).all()
+    """
+    Retorna mensagens de uma interação, restrita ao usuário dono.
+    """
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório."}), 400
+
+    messages = Message.query.filter_by(session_id=session_id, user_id=user_id).order_by(Message.created_at).all()
     if not messages:
-        return jsonify({"error": "Interação/Ticket não encontrado."}), 404
+        return jsonify({"error": "Interação não encontrada para este usuário."}), 404
 
     user = messages[0].user if messages else None
 
@@ -509,10 +539,10 @@ def get_interaction_details(session_id):
             "name": user.email if user else "Unknown",
             "id": user.id if user else None,
         },
-        "status": "responded",  # Você pode criar campo de status se quiser
+        "status": "responded",
         "messages": formatted_messages
     }), 200
-
+    
 @app.route('/api/users', methods=['GET'])
 def list_users():
     search_term = request.args.get('searchTerm', '').lower()
@@ -539,6 +569,7 @@ def list_users():
         }
         for u in users
     ]), 200
+
 @app.route('/api/users/<int:user_id>/ban', methods=['POST'])
 def ban_user(user_id):
     user = User.query.get(user_id)
@@ -564,33 +595,41 @@ def unban_user(user_id):
 @app.route('/api/metrics/realtime', methods=['GET'])
 def get_realtime_metrics():
     try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
         now = datetime.now(timezone.utc)
         one_hour_ago = now - timedelta(hours=1)
         fifteen_minutes_ago = now - timedelta(minutes=15)
 
-        # 1) messages in last hour
-        messages_in_last_hour = Message.query.filter(Message.created_at >= one_hour_ago).count()
+        # 1) messages in last hour for this user
+        messages_in_last_hour = Message.query.filter(
+            Message.user_id == user_id,
+            Message.created_at >= one_hour_ago
+        ).count()
 
-        # 2) online users (last_seen within 15 minutes)
-        online_users_count = User.query.filter(User.last_seen != None).filter(User.last_seen >= fifteen_minutes_ago).count()
+        # 2) online users for this user context (if needed global, mantem tudo)
+        online_users_count = User.query.filter(
+            User.id == user_id,
+            User.last_seen != None,
+            User.last_seen >= fifteen_minutes_ago
+        ).count()
 
-        # 3) average response time (pair user -> assistant (Alfred) within same session)
+        # 3) average response time (user -> assistant)
         total_response_time = 0.0
         response_count = 0
 
-        # Query messages ordered by session_id and created_at to group them in Python
-        msgs = Message.query.order_by(Message.session_id, Message.created_at).all()
+        msgs = Message.query.filter_by(user_id=user_id).order_by(Message.session_id, Message.created_at).all()
         from collections import defaultdict
         sessions = defaultdict(list)
         for m in msgs:
             sessions[m.session_id].append(m)
 
         for session_id, mlist in sessions.items():
-            # mlist already sorted by created_at due to query order_by
             for i, m in enumerate(mlist):
                 if m.role == 'user':
                     user_msg_time = m.created_at.replace(tzinfo=timezone.utc) if m.created_at.tzinfo is None else m.created_at
-                    # find next assistant message after this user message
                     for subsequent in mlist[i+1:]:
                         if subsequent.role == 'assistant':
                             alfred_msg_time = subsequent.created_at.replace(tzinfo=timezone.utc) if subsequent.created_at.tzinfo is None else subsequent.created_at
@@ -615,11 +654,17 @@ def get_realtime_metrics():
     except Exception as e:
         logger.error(f"Error getting real-time metrics: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao calcular ou buscar as métricas."}), 500
+    
+
+  
 
 @app.route('/api/activities', methods=['GET'])
 def list_activities():
     try:
-        # Query params
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
         limit = request.args.get('limit', type=int)
         offset = request.args.get('offset', default=0, type=int)
         activity_type_filter = request.args.get('type')
@@ -628,7 +673,6 @@ def list_activities():
         end_date_str = request.args.get('endDate')
         search_term = request.args.get('searchTerm', '').lower()
 
-        # validation
         if offset < 0:
             return jsonify({"error": "O parâmetro 'offset' deve ser um número inteiro não negativo."}), 400
         if limit is not None and limit <= 0:
@@ -636,63 +680,36 @@ def list_activities():
 
         valid_types = {'message', 'ban', 'unban', 'file', 'response', 'error', 'info', None}
         if activity_type_filter and activity_type_filter not in valid_types:
-            return jsonify({"error": f"O tipo de atividade '{activity_type_filter}' é inválido. Valores possíveis: {', '.join(t for t in valid_types if t)}."}), 400
+            return jsonify({"error": f"Tipo de atividade inválido."}), 400
 
         valid_statuses = {'success', 'warning', 'info', 'error', None}
         if status_filter and status_filter not in valid_statuses:
-            return jsonify({"error": f"O status de atividade '{status_filter}' é inválido. Valores possíveis: {', '.join(s for s in valid_statuses if s)}."}), 400
+            return jsonify({"error": f"Status de atividade inválido."}), 400
 
-        start_date = None
-        if start_date_str:
-            try:
-                start_date = datetime.fromisoformat(start_date_str)
-                if start_date.tzinfo is None:
-                    start_date = start_date.replace(tzinfo=timezone.utc)
-            except ValueError:
-                return jsonify({"error": "Formato de 'startDate' inválido. Use ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)."}), 400
-
-        end_date = None
-        if end_date_str:
-            try:
-                end_date = datetime.fromisoformat(end_date_str)
-                if end_date.tzinfo is None:
-                    end_date = end_date.replace(tzinfo=timezone.utc)
-            except ValueError:
-                return jsonify({"error": "Formato de 'endDate' inválido. Use ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)."}), 400
-
-        if start_date and end_date and start_date > end_date:
-            return jsonify({"error": "'startDate' não pode ser posterior a 'endDate'."}), 400
+        start_date = datetime.fromisoformat(start_date_str).replace(tzinfo=timezone.utc) if start_date_str else None
+        end_date = datetime.fromisoformat(end_date_str).replace(tzinfo=timezone.utc) if end_date_str else None
 
         all_activities = []
         activity_id_counter = 0
 
-        # --- 1. Activities from Messages ---
-        # We'll load messages grouped by session_id and create activity per message (user/assistant)
-        msgs = Message.query.order_by(Message.session_id, Message.created_at).all()
+        # 1. Activities from messages (user only)
+        msgs = Message.query.filter_by(user_id=user_id).order_by(Message.session_id, Message.created_at).all()
         from collections import defaultdict
         sessions = defaultdict(list)
         for m in msgs:
             sessions[m.session_id].append(m)
 
         for session_id, mlist in sessions.items():
-            # resolve user name (try first message user)
             session_user_name = None
-            session_user_platform_id = None
             for m in mlist:
                 if m.user_id:
                     u = User.query.get(m.user_id)
                     if u:
                         session_user_name = u.name or u.email
-                        session_user_platform_id = u.platform_id
                         break
-
             for idx, m in enumerate(mlist):
                 activity_id_counter += 1
-                timestamp = m.created_at
-                # normalize tz
-                if timestamp.tzinfo is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
-
+                timestamp = m.created_at.replace(tzinfo=timezone.utc) if m.created_at.tzinfo is None else m.created_at
                 if m.role == 'user':
                     activity = {
                         "id": f"msg_{session_id}_{idx}",
@@ -714,88 +731,52 @@ def list_activities():
                         "details": (m.content[:100] + "...") if len(m.content) > 100 else m.content
                     }
                 else:
-                    # Ignora roles desconhecidos
                     continue
-
                 all_activities.append(activity)
 
-        # --- 2. Activities from Users (ban/unban) ---
-        banned_users = User.query.filter(User.status == 'banned').all()
-        for u in banned_users:
-            activity_id_counter += 1
-            timestamp = u.last_seen or datetime.now(timezone.utc)
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
-            all_activities.append({
-                "id": f"ban_{u.id}_{activity_id_counter}",
-                "type": "ban",
-                "user": u.name or u.email or f"user_{u.id}",
-                "action": "Usuário Banido",
-                "details": f"Motivo: '{u.ban_reason or 'N/A'}'. Duração: '{u.ban_duration or 'N/A'}'.",
-                "timestamp": timestamp.isoformat(),
-                "status": "warning"
-            })
-
-        # --- 3. Activities from Alfred Files (uploads) ---
-        files = AlfredFile.query.order_by(AlfredFile.uploaded_at.desc()).all()
+        # 2. Activities from files uploaded by this user
+        files = AlfredFile.query.filter_by(uploaded_by_user_id=user_id).order_by(AlfredFile.uploaded_at.desc()).all()
         for f in files:
             activity_id_counter += 1
             ts = f.uploaded_at or datetime.now(timezone.utc)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
             all_activities.append({
                 "id": f"file_upload_{f.id}_{activity_id_counter}",
                 "type": "file",
-                "user": f.uploaded_by_user_id and (User.query.get(f.uploaded_by_user_id).name or User.query.get(f.uploaded_by_user_id).email) or "Sistema (Admin)",
+                "user": f.uploaded_by_user_id and (User.query.get(f.uploaded_by_user_id).name or User.query.get(f.uploaded_by_user_id).email) or "Sistema",
                 "action": "Arquivo Carregado",
                 "details": f"Arquivo '{f.original_filename}' ({f.unique_filename}) carregado.",
                 "timestamp": ts.isoformat(),
                 "status": "success"
             })
 
-        # --- 4. Apply Filters (date, type, status, search) ---
+        # Filters
         filtered_activities = []
         for activity in all_activities:
-            activity_timestamp = datetime.fromisoformat(activity['timestamp'])
-            if activity_timestamp.tzinfo is None:
-                activity_timestamp = activity_timestamp.replace(tzinfo=timezone.utc)
-
-            if start_date and activity_timestamp < start_date:
+            ts = datetime.fromisoformat(activity['timestamp']).replace(tzinfo=timezone.utc)
+            if start_date and ts < start_date: continue
+            if end_date and ts > end_date: continue
+            if activity_type_filter and activity['type'] != activity_type_filter: continue
+            if status_filter and activity.get('status') != status_filter: continue
+            if search_term and search_term not in (activity.get('user') or '').lower() \
+               and search_term not in (activity.get('action') or '').lower() \
+               and search_term not in (activity.get('details') or '').lower():
                 continue
-            if end_date and activity_timestamp > end_date:
-                continue
-            if activity_type_filter and activity['type'] != activity_type_filter:
-                continue
-            if status_filter and activity.get('status') != status_filter:
-                continue
-
-            if search_term:
-                user_match = search_term in (activity.get('user') or '').lower()
-                action_match = search_term in (activity.get('action') or '').lower()
-                details_match = search_term in (activity.get('details') or '').lower()
-                if not (user_match or action_match or details_match):
-                    continue
-
             filtered_activities.append(activity)
 
-        # sort descending by timestamp
         filtered_activities.sort(key=lambda x: datetime.fromisoformat(x['timestamp']), reverse=True)
-
-        # pagination
         total_activities = len(filtered_activities)
         paginated = filtered_activities[offset:]
-        if limit is not None:
-            paginated = paginated[:limit]
+        if limit is not None: paginated = paginated[:limit]
 
-        logger.info(f"Retrieved {len(paginated)} activities (total filtered: {total_activities}) with filters: {request.args}.")
         return jsonify({"total": total_activities, "activities": paginated}), 200
 
-    except ValueError as ve:
-        logger.error(f"Bad Request for activities: {ve}", exc_info=True)
-        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         logger.error(f"Error listing activities: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao buscar o log de atividades."}), 500
+
+
+
 
 @app.route('/api/activities', methods=['DELETE'])
 def clear_activities():
@@ -860,283 +841,107 @@ def clear_activities():
         return jsonify({"error": "Erro no servidor ao limpar o log de atividades."}), 500
 
 
+
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
-    """
-    Handles GET requests to /api/dashboard/stats.
-    Returns aggregated metrics for the dashboard cards.
-    """
     try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
         now = datetime.now(timezone.utc)
-        
-        # Define periods for comparison: last 24 hours and previous 24 hours
         today_24h_ago = now - timedelta(hours=24)
         yesterday_24h_ago = today_24h_ago - timedelta(hours=24)
 
-        total_messages = 0
-        active_users_today = set()
-        active_users_yesterday = set()
-        alfred_responses_today = 0
-        alfred_responses_yesterday = 0
-        messages_today = 0
-        messages_yesterday = 0
+        messages_today = Message.query.filter(
+            Message.user_id == user_id,
+            Message.created_at >= today_24h_ago
+        ).all()
+        messages_yesterday = Message.query.filter(
+            Message.user_id == user_id,
+            Message.created_at >= yesterday_24h_ago,
+            Message.created_at < today_24h_ago
+        ).all()
 
-        # Fetch all messages
-        all_interactions_raw = messages_db_ref.get()
+        active_users_today = {m.user_id for m in messages_today if m.user_id}
+        active_users_yesterday = {m.user_id for m in messages_yesterday if m.user_id}
 
-        if isinstance(all_interactions_raw, dict):
-            for interaction_id, interaction_data in all_interactions_raw.items():
-                if isinstance(interaction_data, dict) and 'messages' in interaction_data:
-                    user_id = interaction_data.get('user', {}).get('id')
-                    
-                    messages_in_interaction = []
-                    if isinstance(interaction_data['messages'], dict):
-                        messages_in_interaction = list(interaction_data['messages'].values())
-                    elif isinstance(interaction_data['messages'], list):
-                        messages_in_interaction = [msg for msg in interaction_data['messages'] if msg is not None]
+        alfred_responses_today = sum(1 for m in messages_today if m.role == "assistant")
+        alfred_responses_yesterday = sum(1 for m in messages_yesterday if m.role == "assistant")
 
-                    for msg in messages_in_interaction:
-                        if isinstance(msg, dict) and 'timestamp' in msg and 'sender' in msg:
-                            total_messages += 1
-                            try:
-                                msg_timestamp = datetime.fromisoformat(msg['timestamp'])
-                                if msg_timestamp.tzinfo is None:
-                                    msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
+        files_managed = AlfredFile.query.filter_by(uploaded_by_user_id=user_id).count()
 
-                                if msg_timestamp >= today_24h_ago:
-                                    if user_id:
-                                        active_users_today.add(user_id)
-                                    messages_today += 1
-                                    if msg['sender'] == 'Alfred':
-                                        alfred_responses_today += 1
-                                elif msg_timestamp >= yesterday_24h_ago: # Messages from the previous 24h period
-                                    if user_id:
-                                        active_users_yesterday.add(user_id)
-                                    messages_yesterday += 1
-                                    if msg['sender'] == 'Alfred':
-                                        alfred_responses_yesterday += 1
-
-                            except ValueError as ve:
-                                logger.warning(f"Invalid timestamp format in message for stats: {msg.get('timestamp', 'N/A')} - {ve}")
-
-
-
-        # --- BUSCA 'filesManaged' DO FIREBASE ---
-        files_managed = 0
-        try:
-            # Pega todos os metadados de arquivos do Firebase
-            all_files_metadata = alfred_files_metadata_ref.get()
-            if all_files_metadata:
-                # Se houver dados, conta o número de entradas (arquivos)
-                # all_files_metadata será um dicionário onde as chaves são os nomes dos arquivos
-                files_managed = len(all_files_metadata)
-        except Exception as e:
-            logger.error(f"Erro ao buscar metadados de arquivos do Firebase: {e}", exc_info=True)
-            files_managed = 0 # Define como 0 em caso de erro na busca
-        # --- FIM DA BUSCA DO FIREBASE ---
-
-        # Calculate percentages
         def calculate_percentage_change(current, previous):
             if previous == 0:
-                return current * 100 if current > 0 else 0 # If previous was 0 and current is >0, it's a huge increase
-            change = ((current - previous) / previous) * 100
-            return round(change, 2)
-
-        total_messages_change_percentage = calculate_percentage_change(messages_today, messages_yesterday)
-        active_users_change_percentage = calculate_percentage_change(len(active_users_today), len(active_users_yesterday))
-        alfred_responses_change_percentage = calculate_percentage_change(alfred_responses_today, alfred_responses_yesterday)
+                return current * 100 if current > 0 else 0
+            return round(((current - previous) / previous) * 100, 2)
 
         stats = {
-            "totalMessages": total_messages,
+            "totalMessages": len(messages_today) + len(messages_yesterday),
             "activeUsers": len(active_users_today),
-            "alfredResponses": alfred_responses_today, # Display current period's responses
+            "alfredResponses": alfred_responses_today,
             "filesManaged": files_managed,
-            "totalMessagesChangePercentage": total_messages_change_percentage,
-            "activeUsersChangePercentage": active_users_change_percentage,
-            "alfredResponsesChangePercentage": alfred_responses_change_percentage
+            "totalMessagesChangePercentage": calculate_percentage_change(len(messages_today), len(messages_yesterday)),
+            "activeUsersChangePercentage": calculate_percentage_change(len(active_users_today), len(active_users_yesterday)),
+            "alfredResponsesChangePercentage": calculate_percentage_change(alfred_responses_today, alfred_responses_yesterday)
         }
 
-        logger.info(f"Dashboard statistics calculated: {stats}")
         return jsonify(stats), 200
 
     except Exception as e:
-        logger.error(f"Error getting dashboard statistics: {e}")
+        logger.error(f"Error getting dashboard statistics: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao buscar as estatísticas do dashboard."}), 500
+
 
 @app.route('/api/alfred/status', methods=['GET'])
 def get_alfred_status():
-    """
-    Handles GET requests to /api/alfred/status.
-    Verifies the connectivity and operational status of the Alfred agent,
-    with primary focus on the Telegram integration status from Firebase.
-    """
-    global last_alfred_heartbeat # Keep if you intend to simulate/update it elsewhere
-
-    current_status = "offline"
-    current_message = "Alfred está offline ou inacessível."
-    details = {
-        "telegramApiConnected": False,
-        "DiscordApiConnected": False,
-        "WhatsAppApiConnected": False,
-        "databaseConnected": False,
-        "lastHeartbeat": last_alfred_heartbeat.isoformat() # Still provide heartbeat info
-    }
-
-    current_status_Discord = "offline"
-    current_message_Discord = "(Discord) Offline."
-    current_status = "offline"
-    current_message = "(Telegram) Offline."
-    current_status_WhatsApp = "offline"
-    current_message_WhatsApp = "(WhatsApp) Offline."
     try:
-        # 1. Check Firebase Database Connectivity (general check)
-        try:
-            # Try to read a small, non-sensitive piece of data (e.g., config)
-            # A simple read from a known path is sufficient for connectivity check
-            test_val = db_ref.child('configurations').get() # Assuming 'configurations' path exists
-            details["databaseConnected"] = True
-            logger.info("Firebase database connection successful.")
-        except Exception as e:
-            logger.error(f"Firebase database connection test failed: {e}")
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
 
+        details = {
+            "telegramApiConnected": False,
+            "DiscordApiConnected": False,
+            "WhatsAppApiConnected": False,
+            "databaseConnected": True,
+            "lastHeartbeat": None
+        }
 
-        # Only proceed to check Telegram status if the database itself is connected
-        if details["databaseConnected"]:
-            Discord_data = discord_status_ref.get()
-            logger.info(f"Discord_data: {Discord_data}")
+        current_status = "offline"
+        current_message = "Alfred está offline ou inacessível."
 
-            Telegram_data = telegram_status_ref.get()
-            logger.info(f"Telegram_data: {Telegram_data}")
+        agents = AgentStatus.query.filter_by(user_id=user_id).all()
+        now = datetime.now(timezone.utc)
 
-            WhatsApp_data = WhatsApp_status_ref.get()
-            logger.info(f"WhatsApp_data: {WhatsApp_data}")
+        for agent in agents:
+            heartbeat = agent.last_update.isoformat() if agent.last_update else None
+            if agent.platform.lower() == "telegram":
+                details["telegramApiConnected"] = (agent.status == "online")
+                details["lastHeartbeat"] = heartbeat
+                if agent.status == "online" and agent.last_update and (now - agent.last_update) < timedelta(days=1):
+                    current_status = "online"
+                    current_message = "(Telegram) Conectado."
+                elif agent.status == "online":
+                    current_status = "degraded"
+                    current_message = "Alfred (Telegram) online, mas último update é antigo."
+            elif agent.platform.lower() == "discord":
+                details["DiscordApiConnected"] = (agent.status == "online")
+            elif agent.platform.lower() == "whatsapp":
+                details["WhatsAppApiConnected"] = (agent.status == "online")
 
-            if Discord_data and isinstance(Discord_data, dict):
-                Discord_bot_status = Discord_data.get("status")
-                Discord_last_update_str = Discord_data.get("last_update")
-
-
-                details["DiscordApiConnected"] = (Discord_bot_status == "online")
-                
-                if Discord_last_update_str:
-                    try:
-                        Discord_last_update_dt = datetime.fromisoformat(Discord_last_update_str)
-                        if Discord_last_update_dt.tzinfo is None:
-                            Discord_last_update_dt = Discord_last_update_dt.replace(tzinfo=timezone.utc)
-                        details["lastHeartbeat"] = Discord_last_update_dt.isoformat() # Use Telegram's last_update as heartbeat
-
-                        # Determine status based on Telegram's reported status and last update time
-                        if Discord_bot_status == "online" and (datetime.now(timezone.utc) - Discord_last_update_dt) < timedelta(days=1):
-                            current_status_Discord = "online"
-                            current_message_Discord = "(Discord) Conectado."
-                        elif Discord_bot_status == "online": # Online but old heartbeat
-                            current_status_Discord = "degraded"
-                            current_message_Discord = "Alfred (Discord) online, mas o último update é antigo. Pode haver problemas de comunicação."
-                        else: # Status is not "online"
-                            current_status_Discord = "offline"
-                            current_message_Discord = f"Alfred (Discord) está {Discord_bot_status.lower()}."
-                    except ValueError as ve:
-                        logger.warning(f"Invalid timestamp format in Telegram status: {Discord_last_update_str} - {ve}")
-                        current_status_Discord = "degraded"
-                        current_message_Discord = "Alfred (Discord) online, mas com timestamp inválido. Verifique logs."
-                else:
-                    # Discord_ status exists but no last_update (unlikely if 'status' is present)
-                    if Discord_bot_status == "online":
-                        current_status_Discord = "degraded"
-                        current_message_Discord = "Alfred (Discord) online, mas sem registro de último update."
-                    else:
-                        current_status_Discord = "offline"
-                        current_message_Discord = f"Alfred (Discord) está {Discord_bot_status.lower()}."
-
-            if Telegram_data and isinstance(Telegram_data, dict):
-                telegram_bot_status = Telegram_data.get("status")
-                telegram_last_update_str = Telegram_data.get("last_update")
-
-
-                details["telegramApiConnected"] = (telegram_bot_status == "online")
-                
-                if telegram_last_update_str:
-                    try:
-                        telegram_last_update_dt = datetime.fromisoformat(telegram_last_update_str)
-                        if telegram_last_update_dt.tzinfo is None:
-                            telegram_last_update_dt = telegram_last_update_dt.replace(tzinfo=timezone.utc)
-                        details["lastHeartbeat"] = telegram_last_update_dt.isoformat() # Use Telegram's last_update as heartbeat
-
-                        # Determine status based on Telegram's reported status and last update time
-                        if telegram_bot_status == "online" and (datetime.now(timezone.utc) - telegram_last_update_dt) < timedelta(days=1):
-                            current_status = "online"
-                            current_message = "(Telegram) Conectado."
-                        elif telegram_bot_status == "online": # Online but old heartbeat
-                            current_status = "degraded"
-                            current_message = "Alfred (Telegram) online, mas o último update é antigo. Pode haver problemas de comunicação."
-                        else: # Status is not "online"
-                            current_status = "offline"
-                            current_message = f"Alfred (Telegram) está {telegram_bot_status.lower()}."
-                    except ValueError as ve:
-                        logger.warning(f"Invalid timestamp format in Telegram status: {telegram_last_update_str} - {ve}")
-                        current_status = "degraded"
-                        current_message = "Alfred (Telegram) online, mas com timestamp inválido. Verifique logs."
-                else:
-                    # Telegram status exists but no last_update (unlikely if 'status' is present)
-                    if telegram_bot_status == "online":
-                        current_status = "degraded"
-                        current_message = "Alfred (Telegram) online, mas sem registro de último update."
-                    else:
-                        current_status = "offline"
-                        current_message = f"Alfred (Telegram) está {telegram_bot_status.lower()}."
-
-            if WhatsApp_data and isinstance(WhatsApp_data, dict):
-                WhatsApp_status = WhatsApp_data.get("status")
-                WhatsApp_last_update_str = WhatsApp_data.get("last_update")
-                details["WhatsAppApiConnected"] = (WhatsApp_status == "online")
-                if WhatsApp_last_update_str:
-                    try:
-                        WhatsApp_last_update_dt = datetime.fromisoformat(WhatsApp_last_update_str)
-                        if WhatsApp_last_update_dt.tzinfo is None:
-                            WhatsApp_last_update_dt = WhatsApp_last_update_dt.replace(tzinfo=timezone.utc)
-                        details["lastHeartbeat"] = WhatsApp_last_update_dt.isoformat() 
-
-                        # Determine status based on WhatsApp's reported status and last update time
-                        if WhatsApp_status == "online" and (datetime.now(timezone.utc) - WhatsApp_last_update_dt) < timedelta(days=1):
-                            current_status_WhatsApp = "online"
-                            current_message_WhatsApp = "(WhatsApp) Conectado."
-                        elif WhatsApp_status == "online": # Online but old heartbeat
-                            current_status_WhatsApp = "degraded"
-                            current_message_WhatsApp = "Alfred (WhatsApp) online, mas o último update é antigo. Pode haver problemas de comunicação."
-                        else: # Status is not "online"
-                            current_status_WhatsApp = "offline"
-                            current_message_WhatsApp = f"Alfred (WhatsApp) está {telegram_bot_status.lower()}."
-                    except ValueError as ve:
-                        logger.warning(f"Invalid timestamp format in WhatsApp status: {telegram_last_update_str} - {ve}")
-                        current_status_WhatsApp = "degraded"
-                        current_message_WhatsApp = "Alfred (WhatsApp) online, mas com timestamp inválido. Verifique logs."
-                else:
-                    # WhatsApp status exists but no last_update (unlikely if 'status' is present)
-                    if WhatsApp_status == "online":
-                        current_status_WhatsApp = "degraded"
-                        current_message_WhatsApp = "Alfred (WhatsApp) online, mas sem registro de último update."
-                    else:
-                        current_status_WhatsApp = "offline"
-                        current_message_WhatsApp = f"Alfred (WhatsApp) está {telegram_bot_status.lower()}."
-
-
-
-        else:
-            current_status = "offline"
-            current_message = "Alfred está offline. Falha na conexão com o banco de dados Firebase."
+        return jsonify({
+            "status": current_status,
+            "message": current_message,
+            "details": details
+        }), 200
 
     except Exception as e:
-        logger.error(f"Internal server error when checking Alfred status: {e}")
-        current_status = "error"
-        current_message = "Erro interno do servidor ao verificar o status do Alfred."
-
-    current_message_final = current_message + current_message_Discord + current_message_WhatsApp
-    logger.info(f"Alfred status checked: {current_status}, Message: {current_message}, Details: {details}")
-    return jsonify({
-        "status": current_status,
-        "message": current_message_final,
-        "details": details
-    }), 200
+        logger.error(f"Internal server error when checking Alfred status: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": "Erro interno do servidor ao verificar o status do Alfred."
+        }), 500
 
 @app.route('/api/agents/initialize', methods=['POST'], strict_slashes=False)
 def initialize_agent():

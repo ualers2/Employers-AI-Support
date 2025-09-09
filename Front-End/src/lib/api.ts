@@ -78,10 +78,36 @@ export interface AlfredFile {
     isEditing?: boolean; // Frontend specific state
 }
 
+// --- New/Updated Interface for Recent Messages ---
+export interface RecentMessage {
+    id: string; // Unique identifier for the message/interaction
+    user: string; // Display name of the user
+    userId: string; // User's ID or handle (e.g., @username)
+    message: string; // The content of the message
+    timestamp: string; // Timestamp of the message (ISO string or similar)
+    status: "responded" | "pending" | "resolved"; // Status of the interaction
+}
+
+// --- Alfred File Management Interface and API Functions ---
+export interface AlfredFile {
+    id: string;
+    name: string;
+    type: string;
+    size: string;
+    lastModified: string;
+    url?: string;
+    content?: string;
+    isEditing?: boolean;
+}
+
+const getUserIdFromLocalStorage = (): string | null => {
+    return localStorage.getItem('user_email');
+};
+
 // --- New API Function for Recent Messages ---
 export const fetchRecentMessages = async (): Promise<RecentMessage[]> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/messages/recent`); // New endpoint
+        const response = await fetch(`${API_BASE_URL}/messages/recent?user_id=${encodeURIComponent(userId)}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -98,6 +124,9 @@ export const uploadAlfredFile = async (file: File, caption: string = '', channel
         formData.append('file', file);
         if (caption) formData.append('caption', caption);
         if (channelId) formData.append('channelId', channelId);
+
+        const userId = localStorage.getItem('user_email') || '';
+        formData.append('user_id', userId);
 
         const response = await fetch(`${API_BASE_URL}/alfred-files/upload`, { // Updated endpoint
             method: 'POST',
@@ -117,12 +146,13 @@ export const uploadAlfredFile = async (file: File, caption: string = '', channel
 
 export const fetchAlfredFiles = async (): Promise<AlfredFile[]> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/alfred-files`); // Updated endpoint
+        const userId = localStorage.getItem('user_email') || '';
+        const response = await fetch(`${API_BASE_URL}/alfred-files?user_id=${encodeURIComponent(userId)}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const data: AlfredFile[] = await response.json(); // Backend now returns a list directly
-        return data; // Data should already match AlfredFile structure
+        const data: AlfredFile[] = await response.json();
+        return data;
     } catch (error) {
         console.error("Error fetching Alfred files:", error);
         throw error;
@@ -131,12 +161,13 @@ export const fetchAlfredFiles = async (): Promise<AlfredFile[]> => {
 
 export const fetchAlfredFileContent = async (fileId: string): Promise<{ id: string; name: string; content: string; lastModified: string }> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}/content`); // Updated endpoint
+        const userId = localStorage.getItem('user_email') || '';
+        const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}/content?user_id=${encodeURIComponent(userId)}`);
         if (!response.ok) {
             const errorData = await response.json();
             throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
         }
-        return await response.json(); // Backend returns JSON with content and metadata
+        return await response.json();
     } catch (error) {
         console.error(`Error fetching content for file ID ${fileId}:`, error);
         throw error;
@@ -145,11 +176,10 @@ export const fetchAlfredFileContent = async (fileId: string): Promise<{ id: stri
 
 export const updateAlfredFileContent = async (fileId: string, content: string): Promise<{ message: string; fileId: string; lastModified: string }> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}/content`, { // Updated endpoint
+        const userId = localStorage.getItem('user_email') || '';
+        const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}/content?user_id=${encodeURIComponent(userId)}`, {
             method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content }),
         });
 
@@ -166,7 +196,8 @@ export const updateAlfredFileContent = async (fileId: string, content: string): 
 
 export const deleteAlfredFile = async (fileId: string): Promise<{ message: string }> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}`, { // Updated endpoint
+        const userId = localStorage.getItem('user_email') || '';
+        const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}?user_id=${encodeURIComponent(userId)}`, {
             method: 'DELETE',
         });
         if (!response.ok) {
@@ -182,7 +213,8 @@ export const deleteAlfredFile = async (fileId: string): Promise<{ message: strin
 
 
 export const fetchBotConfiguration = async (): Promise<FullBotConfiguration> => {
-    const response = await fetch(`${API_BASE_URL}/config`);
+    const userId = localStorage.getItem('user_email') || '';
+    const response = await fetch(`${API_BASE_URL}/config?user_id=${encodeURIComponent(userId)}`);
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
     // Map backend flat response to new front-end shape
@@ -232,11 +264,11 @@ export const updateBotConfiguration = async (config: FullBotConfiguration): Prom
         alfredModel: config.alfredConfig.alfredModel,
         alfredInstructions: config.alfredConfig.alfredInstructions,
         toolsEnabled: config.alfredConfig.toolsEnabled,
+        user_id: localStorage.getItem('user_email') || ''
     };
     // Include Discord keys if provided
     if (config.botConfig.discordBotToken) payload.discordBotToken = config.botConfig.discordBotToken;
     if (config.botConfig.discordChannelId) payload.discordChannelId = config.botConfig.discordChannelId;
-
 
 
     const response = await fetch(`${API_BASE_URL}/config`, {
@@ -254,7 +286,8 @@ export const updateBotConfiguration = async (config: FullBotConfiguration): Prom
 
 
 export const fetchRealtimeMetrics = async (): Promise<RealtimeMetrics> => {
-    const response = await fetch(`${API_BASE_URL}/metrics/realtime`);
+    const userId = localStorage.getItem('user_email') || '';
+    const response = await fetch(`${API_BASE_URL}/metrics/realtime?user_id=${encodeURIComponent(userId)}`);
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return await response.json();
 };
@@ -265,8 +298,10 @@ export const fetchActivityLog = async (
     filters?: { type?: string; status?: string; startDate?: string; endDate?: string; searchTerm?: string; }
 ): Promise<ActivityLogResponse> => {
     const params = new URLSearchParams();
+    const userId = localStorage.getItem('user_email') || '';
     params.append('limit', limit.toString());
     params.append('offset', offset.toString());
+    params.append('user_id', userId);
     if (filters) {
         for (const key in filters) {
             const value = filters[key as keyof typeof filters];
