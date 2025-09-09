@@ -1,3 +1,5 @@
+# Back-End\api.py
+
 import os
 import logging
 import uuid
@@ -17,11 +19,12 @@ from flask import request, jsonify
 from typing import Dict, Any, Optional
 from datetime import datetime
 import time
+from sqlalchemy import desc, func
 
 
 from ClienteChat.ai import CustomerChatAgent
 from Keys.Firebase.FirebaseApp import init_firebase
-from Modules.Models.postgressSQL import db as db_postgress, User
+from Modules.Models.postgressSQL import db as db_postgress, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -69,7 +72,7 @@ with app.app_context():
 
 
 # Endpoint para criar login (cadastro)
-@app.route("/create-login", methods=["POST"])
+@app.route("/api/create-login", methods=["POST"])
 def create_login():
     data = request.get_json()
 
@@ -85,14 +88,14 @@ def create_login():
     new_user = User(email=email)
     new_user.set_password(password)
 
-    db.session.add(new_user)
-    db.session.commit()
+    db_postgress.session.add(new_user)
+    db_postgress.session.commit()
 
     return jsonify({"message": "Usuário criado com sucesso"}), 201
 
 
 # Endpoint para login
-@app.route("/login", methods=["POST"])
+@app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
 
@@ -117,15 +120,28 @@ def chat_assistant():
         user_msg = data.get("message", "").strip()
         if not user_msg:
             return jsonify({"success": False, "error": "Message field is required"}), 400
-        logger.info(f"REQ  ")
+
         user_context = data.get("user_context", {})
         conversation_history = data.get("conversation_history", [])
+        user_id = user_context.get("user_id")  # pode ser None
         session_id = data.get("session_id") or str(uuid.uuid4())  # garante um id
         enable_analytics = data.get("enable_analytics", True)
         model = data.get("model", "gpt-5-nano")
 
-        # Log input do usuário no Firebase
-        save_message_to_firebase(session_id, "user", user_msg)
+        # --- IDENTIFICAR USUÁRIO ---
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"success": False, "error": "Usuário não encontrado"}), 401
+
+        # --- SALVAR MENSAGEM DO USUÁRIO ---
+        user_message = Message(
+            session_id=session_id,
+            user_id=user_id,
+            role="user",
+            content=user_msg
+        )
+        db_postgress.session.add(user_message)
+        db_postgress.session.commit()
 
         enriched_context = _enrich_user_context(user_context, request)
 
@@ -137,18 +153,36 @@ def chat_assistant():
             conversation_history=conversation_history,
             model=model,
             UPLOAD_URL=UPLOAD_URL_VIDEOMANAGER,
-            USER_ID=enriched_context.get("user_id", "anonymous"),
+            USER_ID=str(user_id),
             enable_analytics=enable_analytics
         ))
 
         if result["success"]:
+            agent_output = result["response"].content
+
+            # --- SALVAR MENSAGEM DO ASSISTENTE ---
+            assistant_message = Message(
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                content=agent_output
+            )
+            db_postgress.session.add(assistant_message)
+            db_postgress.session.commit()
+
             response_data = _format_successful_response(result, session_id)
-            agent_output = result["response"].content  # resposta do agente
-            # Log output do assistente no Firebase
-            save_message_to_firebase(session_id, "assistant", agent_output)
         else:
+            agent_output = f"[ERRO] {result.get('error')}"
+            assistant_message = Message(
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                content=agent_output
+            )
+            db_postgress.session.add(assistant_message)
+            db_postgress.session.commit()
+
             response_data = _format_error_response(result, user_msg, session_id)
-            save_message_to_firebase(session_id, "assistant", f"[ERRO] {result.get('error')}")
 
         return jsonify(response_data)
 
@@ -159,868 +193,414 @@ def chat_assistant():
             "error": "Internal server error",
             "message": "Ocorreu um erro interno. Nossa equipe foi notificada."
         }), 500
+    
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
     if request.method == 'GET':
-        return get_configurations()
+        try:
+            configs = Config.query.all()
+            default = {
+                "botConfig": {},
+                "moderationConfig": {},
+                "alfredConfig": {}
+            }
+            for c in configs:
+                default[c.key] = c.value if isinstance(c.value, dict) else {}
+            return jsonify(default), 200
+        except Exception as e:
+            logger.exception("Erro em get_configurations")
+            return jsonify({"error": "Erro interno ao buscar configurações"}), 500
+
     elif request.method == 'POST':
-        return save_configurations()
+        try:
+            data = request.get_json() or {}
+            for key, value in data.items():
+                config = Config.query.filter_by(key=key).first()
+                if config:
+                    config.value = value
+                else:
+                    config = Config(key=key, value=value)
+                    db_postgress.session.add(config)
+            db_postgress.session.commit()
+            return jsonify({"message": "Configurações salvas com sucesso!"}), 200
+        except Exception as e:
+            logger.exception(f"Error saving configurations: {e}")
+            return jsonify({"error": "Erro ao salvar configurações."}), 500
+        
 
 @app.route('/api/alfred-files/upload', methods=['POST'])
 def upload_alfred_file():
-    """
-    Handles file uploads for Alfred's knowledge base, saving files locally and metadata to Firebase.
-    Receives a file, optional channelId, and caption.
-    Stores the file in the 'alfred_knowledge' directory on the server.
-    """
     if 'file' not in request.files:
-        return jsonify({"error": "Nenhum arquivo fornecido na requisição."}), 400
+        return jsonify({"error": "Nenhum arquivo fornecido."}), 400
 
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "Nome do arquivo vazio."}), 400
-
-    if not file:
+    if not file or file.filename == '':
         return jsonify({"error": "Arquivo inválido."}), 400
 
     channel_id = request.form.get('channelId')
     caption = request.form.get('caption')
 
     allowed_extensions = {'md', 'txt', 'pdf', 'docx', 'csv', 'json'}
-    file_extension = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
-
+    file_extension = file.filename.rsplit('.', 1)[-1].lower()
     if file_extension not in allowed_extensions:
-        return jsonify({"error": f"Formato de arquivo não permitido. Apenas {', '.join(allowed_extensions)} são aceitos."}), 400
+        return jsonify({"error": f"Formato de arquivo não permitido."}), 400
 
     try:
-        unique_filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}_{file.filename}"
+        unique_filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}_{file.filename}"
         file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
-
         file.save(file_path)
 
         file_stats = os.stat(file_path)
         file_size_bytes = file_stats.st_size
-        last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc) # Adicione tz=timezone.utc
+        last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime)
 
-        # --- ATUALIZAÇÃO PARA FIREBASE ---
-        file_metadata = {
-            "originalFileName": file.filename,
-            "channelId": channel_id,
-            "caption": caption,
-            "size_bytes": file_size_bytes,
-            "uploaded_at": datetime.now(timezone.utc).isoformat(), # Timestamp de upload
-            "last_modified_local": last_modified_timestamp.isoformat(), # Última modificação no sistema de arquivos
-            "local_path": file_path, # Armazena o caminho local no Firebase
-            "url_download": f"/api/alfred-files/download/{unique_filename}", # URL para download
-            "url_content": f"/api/alfred-files/{unique_filename}/content" # URL para obter conteúdo
-        }
-        # Salva os metadados no Firebase usando unique_filename como chave
-        alfred_files_metadata_ref.child(unique_filename.replace('.', '_')).set(file_metadata)
-        # --- FIM ATUALIZAÇÃO PARA FIREBASE ---
+        # Salvar no PostgreSQL
+        alfred_file = AlfredFile(
+            unique_filename=unique_filename,
+            original_filename=file.filename,
+            channel_id=channel_id,
+            caption=caption,
+            size_bytes=file_size_bytes,
+            last_modified_local=last_modified_timestamp,
+            local_path=file_path,
+            url_download=f"/api/alfred-files/download/{unique_filename}",
+            url_content=f"/api/alfred-files/{unique_filename}/content"
+        )
+        db_postgress.session.add(alfred_file)
+        db_postgress.session.commit()
 
-        response_data = {
+        return jsonify({
             "message": "Arquivo carregado com sucesso.",
-            "fileId": unique_filename.replace('.', '_'),
+            "fileId": unique_filename,
             "fileName": file.filename,
             "size": format_bytes(file_size_bytes),
             "lastModified": last_modified_timestamp.isoformat()
-        }
-
-        logger.info(f"File '{file.filename}' uploaded to '{file_path}' and metadata updated in Firebase.")
-
-        return jsonify(response_data), 200
+        }), 200
 
     except Exception as e:
-        logger.error(f"Error uploading file for Alfred: {e}", exc_info=True)
-        return jsonify({"error": "Erro no servidor ao processar o upload do arquivo."}), 500
+        logger.exception(f"Erro no upload do arquivo: {e}")
+        return jsonify({"error": "Erro no servidor ao processar o upload."}), 500
 
 @app.route('/api/alfred-files', methods=['GET'])
 def list_alfred_files():
     """
-    Handles GET requests to /api/alfred-files.
-    Returns a list of all Alfred's configuration files with their metadata from Firebase.
+    Lista todos os arquivos Alfred com seus metadados do PostgreSQL.
     """
     try:
         files_list = []
-        
-        # --- ATUALIZAÇÃO PARA FIREBASE ---
-        metadata = alfred_files_metadata_ref.get()
-        if not metadata:
-            logger.info("No Alfred file metadata found in Firebase.")
-            return jsonify([]), 200
-        # --- FIM ATUALIZAÇÃO PARA FIREBASE ---
 
-        # metadata será um dicionário onde as chaves são os unique_filenames
-        for unique_filename, file_info in metadata.items():
-            if not isinstance(file_info, dict): # Proteção contra dados malformados no Firebase
-                logger.warning(f"Skipping malformed metadata entry for '{unique_filename}': {file_info}")
+        alfred_files = AlfredFile.query.all()
+        for af in alfred_files:
+            if not os.path.exists(af.local_path):
+                logger.warning(f"Arquivo '{af.unique_filename}' existe no DB mas não no disco. Pulando.")
                 continue
 
-            # Obter o caminho local do Firebase
-            local_file_path = file_info.get("local_path")
-            
-            if not local_file_path or not os.path.exists(local_file_path):
-                logger.warning(f"File '{unique_filename}' found in Firebase metadata but not on disk or path invalid: '{local_file_path}'. Skipping.")
-                # Opcional: Remover entrada do Firebase se o arquivo local não existe
-                # alfred_files_metadata_ref.child(unique_filename).delete()
-                continue
-
-            # Get actual file stats for the most up-to-date info
-            file_stats = os.stat(local_file_path)
+            file_stats = os.stat(af.local_path)
             last_modified_dt = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
 
             files_list.append({
-                "id": unique_filename,
-                "name": file_info.get("originalFileName", unique_filename),
-                "type": get_file_type(file_info.get("originalFileName", unique_filename)),
+                "id": af.unique_filename,
+                "name": af.original_filename,
+                "type": get_file_type(af.original_filename),
                 "size": format_bytes(file_stats.st_size),
                 "lastModified": last_modified_dt.isoformat(),
-                "url": file_info.get("url_download"), # Usar a URL do Firebase
-                "localPath": local_file_path # Adicionar o caminho local aqui
+                "url": af.url_download,
+                "localPath": af.local_path
             })
 
-        logger.info(f"Listed {len(files_list)} Alfred files from Firebase metadata.")
         return jsonify(files_list), 200
 
     except Exception as e:
-        logger.error(f"Error listing Alfred files: {e}", exc_info=True)
-        return jsonify({"error": "Erro no servidor ao buscar a lista de arquivos."}), 500
-
+        logger.exception("Erro ao listar arquivos Alfred")
+        return jsonify({"error": "Erro interno ao buscar arquivos."}), 500
+    
 @app.route('/api/alfred-files/<string:fileId>/content', methods=['PUT'])
 def update_alfred_file_content(fileId):
     """
-    Handles PUT requests to /api/alfred-files/{fileId}/content.
-    Updates the content of a specific Alfred knowledge file locally and its metadata in Firebase.
+    Atualiza o conteúdo de um arquivo Alfred no disco e os metadados no PostgreSQL.
     """
     try:
         data = request.get_json()
         if not data or 'content' not in data:
-            return jsonify({"error": "Corpo da requisição inválido. 'content' é um campo obrigatório."}), 400
+            return jsonify({"error": "'content' é obrigatório."}), 400
 
         new_content = data['content']
         if not isinstance(new_content, str):
-            return jsonify({"error": "O campo 'content' deve ser uma string."}), 400
+            return jsonify({"error": "'content' deve ser uma string."}), 400
 
-        # --- ATUALIZAÇÃO PARA FIREBASE ---
-        # Tenta buscar os metadados primeiro para obter o local_path
-        file_metadata_from_db = alfred_files_metadata_ref.child(fileId).get()
-        if not file_metadata_from_db or not isinstance(file_metadata_from_db, dict):
-            logger.warning(f"Metadata for file ID '{fileId}' not found or malformed in Firebase.")
-            return jsonify({"error": "Metadados do arquivo não encontrados."}), 404
-        
-        file_path = file_metadata_from_db.get("local_path")
-        if not file_path:
-            logger.error(f"Local path not found in Firebase metadata for file ID '{fileId}'.")
-            return jsonify({"error": "Caminho local do arquivo não configurado nos metadados."}), 500
-        # --- FIM ATUALIZAÇÃO PARA FIREBASE ---
+        # Busca o arquivo no PostgreSQL
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado."}), 404
 
+        file_path = alfred_file.local_path
         if not os.path.exists(file_path):
-            logger.warning(f"File with ID '{fileId}' not found at '{file_path}' (local disk).")
-            # Opcional: Remover entrada do Firebase se o arquivo local não existe
-            # alfred_files_metadata_ref.child(fileId).delete()
-            return jsonify({"error": "Arquivo não encontrado no disco."}), 404
+            return jsonify({"error": "Arquivo não existe no disco."}), 404
 
+        # Atualiza conteúdo local
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
         file_stats = os.stat(file_path)
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
-        
-        # --- ATUALIZAÇÃO PARA FIREBASE ---
-        # Atualiza os metadados no Firebase
-        alfred_files_metadata_ref.child(fileId).update({
-            "size_bytes": file_stats.st_size,
-            "last_modified_local": last_modified_timestamp.isoformat(), # Atualiza o timestamp de modificação local
-            "last_updated_firebase": datetime.now(timezone.utc).isoformat() # Timestamp da última atualização no Firebase
-        })
-        # --- FIM ATUALIZAÇÃO PARA FIREBASE ---
 
-        logger.info(f"Content for file ID '{fileId}' updated successfully (local & Firebase).")
+        # Atualiza metadados no PostgreSQL
+        alfred_file.size_bytes = file_stats.st_size
+        alfred_file.last_modified_local = last_modified_timestamp
+        db_postgress.session.commit()
+
         return jsonify({
-            "message": "Conteúdo do arquivo atualizado com sucesso.",
+            "message": "Conteúdo atualizado com sucesso.",
             "fileId": fileId,
             "lastModified": last_modified_timestamp.isoformat()
         }), 200
 
     except Exception as e:
-        logger.error(f"Error updating content for file ID '{fileId}': {e}", exc_info=True)
-        return jsonify({"error": "Erro no servidor ao atualizar o conteúdo do arquivo."}), 500
-
+        logger.exception(f"Erro ao atualizar conteúdo do arquivo {fileId}: {e}")
+        return jsonify({"error": "Erro interno ao atualizar o arquivo."}), 500
+    
 @app.route('/api/alfred-files/<string:fileId>/content', methods=['GET'])
 def get_alfred_file_content(fileId):
     """
-    Handles GET requests to /api/alfred-files/{fileId}/content.
-    Retrieves the textual content of a specific Alfred knowledge file, along with metadata from Firebase.
+    Retorna o conteúdo de um arquivo Alfred e seus metadados do PostgreSQL.
     """
     try:
-        # 1. Buscar os metadados no Firebase usando o fileId modificado (com underscore)
-        file_metadata_from_db = alfred_files_metadata_ref.child(fileId).get()
-        if not file_metadata_from_db or not isinstance(file_metadata_from_db, dict):
-            logger.warning(f"Metadata for file ID '{fileId}' not found or malformed in Firebase.")
-            return jsonify({"error": "Metadados do arquivo não encontrados."}), 404
-        
-        # 2. Obter o caminho LOCAL REAL do arquivo do Firebase
-        file_path = file_metadata_from_db.get("local_path")
-        if not file_path:
-            logger.error(f"Local path not found in Firebase metadata for file ID '{fileId}'.")
-            return jsonify({"error": "Caminho local do arquivo não configurado nos metadados."}), 500
-        
-        # 3. Verificar se o arquivo existe no disco usando o local_path REAL
+        # Busca no PostgreSQL
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado."}), 404
+
+        file_path = alfred_file.local_path
         if not os.path.exists(file_path):
-            logger.warning(f"File with ID '{fileId}' (local path: '{file_path}') not found on disk.")
-            # Opcional: Você pode remover a entrada do Firebase se o arquivo local não existe
-            # alfred_files_metadata_ref.child(fileId).delete()
-            return jsonify({"error": "Arquivo não encontrado no disco."}), 404
+            return jsonify({"error": "Arquivo não existe no disco."}), 404
 
-        # 4. Usar o originalFileName para determinar a extensão para validação
-        original_file_name = file_metadata_from_db.get("originalFileName", "unknown")
-        file_extension = original_file_name.rsplit('.', 1)[1].lower() if '.' in original_file_name else ''
+        # Somente extensões de texto podem ser lidas
+        file_extension = alfred_file.original_filename.rsplit('.', 1)[1].lower() if '.' in alfred_file.original_filename else ''
+        allowed_readable_extensions = {'md', 'txt', 'csv', 'json'}
 
-        allowed_readable_extensions = {'md', 'txt', 'csv', 'json'} 
-        
         if file_extension not in allowed_readable_extensions:
-            logger.warning(f"Attempted to read content of non-text file '{fileId}' (original: {original_file_name}). Extension '{file_extension}' not supported for content viewing.")
-            return jsonify({"error": "Visualização de conteúdo para este tipo de arquivo não é suportada."}), 400
+            return jsonify({"error": "Visualização de conteúdo não suportada para este tipo de arquivo."}), 400
 
-        # 5. Ler o conteúdo do arquivo usando o local_path REAL
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         last_modified_timestamp = datetime.fromtimestamp(os.path.getmtime(file_path), tz=timezone.utc)
 
-        response_data = {
-            "id": fileId, # Este é o ID do Firebase (com underscore)
-            "name": original_file_name, # Nome original do arquivo (com ponto)
+        return jsonify({
+            "id": fileId,
+            "name": alfred_file.original_filename,
             "content": content,
             "lastModified": last_modified_timestamp.isoformat()
-        }
-
-        logger.info(f"Content for file ID '{fileId}' retrieved successfully.")
-        return jsonify(response_data), 200
+        }), 200
 
     except Exception as e:
-        logger.error(f"Error retrieving content for file ID '{fileId}': {e}", exc_info=True)
-        return jsonify({"error": "Erro no servidor ao buscar o conteúdo do arquivo."}), 500
-
+        logger.exception(f"Erro ao buscar conteúdo do arquivo {fileId}: {e}")
+        return jsonify({"error": "Erro interno ao buscar o conteúdo do arquivo."}), 500
+    
 @app.route('/api/alfred-files/<string:fileId>/download', methods=['GET'])
 def download_alfred_file(fileId):
     """
-    Handles GET requests to /api/alfred-files/{fileId}/download.
-    Allows downloading of a specific Alfred knowledge file, using its original filename and metadata from Firebase.
+    Permite o download de um arquivo Alfred usando metadados do PostgreSQL.
     """
     try:
-        # 1. Buscar os metadados no Firebase usando o fileId modificado (com underscore)
-        file_metadata_from_db = alfred_files_metadata_ref.child(fileId).get()
-        if not file_metadata_from_db or not isinstance(file_metadata_from_db, dict):
-            logger.warning(f"Metadata for file ID '{fileId}' not found or malformed in Firebase for download.")
-            return jsonify({"error": "Metadados do arquivo não encontrados."}), 404
-        
-        # 2. Obter o originalFileName e o local_path REAL do arquivo do Firebase
-        original_filename = file_metadata_from_db.get("originalFileName", fileId) # Fallback para fileId se não encontrar
-        file_path = file_metadata_from_db.get("local_path")
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
+        if not alfred_file:
+            return jsonify({"error": "Arquivo não encontrado."}), 404
 
-        if not file_path:
-            logger.error(f"Local path not found in Firebase metadata for file ID '{fileId}' during download.")
-            return jsonify({"error": "Caminho local do arquivo não configurado nos metadados."}), 500
-        
-        # 3. Verificar se o arquivo existe no disco usando o local_path REAL
+        file_path = alfred_file.local_path
         if not os.path.exists(file_path):
-            logger.warning(f"Download request for non-existent file ID: '{fileId}' (local path: '{file_path}').")
-            # Opcional: Remover entrada do Firebase se o arquivo local não existe
-            # alfred_files_metadata_ref.child(fileId).delete()
             return jsonify({"error": "Arquivo não encontrado no disco."}), 404
 
-        logger.info(f"Serving download for file ID '{fileId}' (original name: '{original_filename}').")
-        
-        # send_from_directory precisa da pasta base e do NOME DO ARQUIVO DENTRO DESSA PASTA.
-        # file_path é o caminho COMPLETO. Precisamos extrair apenas o nome do arquivo.
-        # O nome do arquivo no disco é o último componente do file_path.
         filename_on_disk = os.path.basename(file_path)
 
         return send_from_directory(
-            UPLOAD_FOLDER,           # O diretório base onde o arquivo está
-            filename_on_disk,        # O nome real do arquivo no disco (com o ponto!)
-            as_attachment=True,      # Força o download
-            download_name=original_filename # Nome que o usuário verá ao baixar
+            UPLOAD_FOLDER,
+            filename_on_disk,
+            as_attachment=True,
+            download_name=alfred_file.original_filename
         )
-    except FileNotFoundError:
-        logger.error(f"File not found during download process for ID '{fileId}'.", exc_info=True)
-        return jsonify({"error": "Arquivo não encontrado."}), 404
+
     except Exception as e:
-        logger.error(f"Error downloading file with ID '{fileId}': {e}", exc_info=True)
-        return jsonify({"error": "Erro no servidor ao tentar baixar o arquivo."}), 500
+        logger.exception(f"Erro ao baixar arquivo {fileId}: {e}")
+        return jsonify({"error": "Erro interno ao tentar baixar o arquivo."}), 500
     
 @app.route('/api/alfred-files/<string:fileId>', methods=['DELETE'])
 def delete_alfred_file(fileId):
     """
-    Handles DELETE requests to /api/alfred-files/{fileId}.
-    Removes a specific Alfred knowledge file from local storage and its metadata from Firebase.
+    Remove um arquivo Alfred do disco e seus metadados do PostgreSQL.
     """
     try:
-        # --- ATUALIZAÇÃO PARA FIREBASE ---
-        # Obter o local_path do Firebase antes de deletar
-        file_metadata_from_db = alfred_files_metadata_ref.child(fileId).get()
-        if not file_metadata_from_db or not isinstance(file_metadata_from_db, dict):
-            logger.warning(f"Metadata for file ID '{fileId}' not found or malformed in Firebase for delete.")
-            # Mesmo que não haja metadados, tentamos deletar o arquivo localmente para consistência
-            file_path = os.path.join(UPLOAD_FOLDER, fileId) # Tentar um caminho padrão
-        else:
-            file_path = file_metadata_from_db.get("local_path")
-            if not file_path:
-                logger.error(f"Local path not found in Firebase metadata for file ID '{fileId}' during delete.")
-                file_path = os.path.join(UPLOAD_FOLDER, fileId) # Fallback
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId).first()
+        file_path = alfred_file.local_path if alfred_file else os.path.join(UPLOAD_FOLDER, fileId)
 
-        # 1. Delete the file from disk (if it exists)
         if os.path.exists(file_path):
             os.remove(file_path)
-            logger.info(f"File '{fileId}' successfully deleted from disk at '{file_path}'.")
-        else:
-            logger.warning(f"File '{fileId}' not found on disk at '{file_path}' during delete request.")
+            logger.info(f"Arquivo '{fileId}' excluído do disco.")
 
-        # 2. Delete the metadata from Firebase
-        alfred_files_metadata_ref.child(fileId).delete()
-        logger.info(f"Metadata for file ID '{fileId}' successfully removed from Firebase.")
-        # --- FIM ATUALIZAÇÃO PARA FIREBASE ---
+        if alfred_file:
+            db_postgress.session.delete(alfred_file)
+            db_postgress.session.commit()
+            logger.info(f"Metadados do arquivo '{fileId}' removidos do PostgreSQL.")
 
         return jsonify({"message": "Arquivo excluído com sucesso."}), 200
 
     except Exception as e:
-        logger.error(f"Error deleting file with ID '{fileId}': {e}", exc_info=True)
-        return jsonify({"error": "Erro no servidor ao excluir o arquivo."}), 500
+        logger.exception(f"Erro ao excluir arquivo {fileId}: {e}")
+        return jsonify({"error": "Erro interno ao excluir o arquivo."}), 500
+
 
 @app.route('/api/messages/recent', methods=['GET'])
 def list_recent_messages():
-    """
-    Handles GET requests to /api/messages/recent.
-    Retrieves a list of recent messages/interactions between users and Alfred,
-    supporting filtering by limit, status, and after_id for pagination.
-    """
-    try:
-        limit = request.args.get('limit', default=10, type=int)
-        status_filter = request.args.get('status')
-        after_id = request.args.get('after_id')
+    limit = request.args.get('limit', default=10, type=int)
+    status_filter = request.args.get('status')
+    after_id = request.args.get('after_id')
 
-        if limit <= 0:
-            return jsonify({"error": "O parâmetro 'limit' deve ser um número inteiro positivo."}), 400
-        
-        valid_statuses = {'pending', 'responded', 'resolved'}
-        if status_filter and status_filter not in valid_statuses:
-            return jsonify({"error": f"O parâmetro 'status' é inválido. Valores possíveis: {', '.join(valid_statuses)}."}), 400
+    # Buscar últimas mensagens por session_id
+    query = db.session.query(
+        Message.session_id,
+        func.max(Message.created_at).label('last_timestamp'),
+        func.max(Message.id).label('last_message_id')
+    ).group_by(Message.session_id)
 
-        all_interactions_raw = messages_db_ref.get()
+    if status_filter:
+        # Aqui depende se você tem coluna de status na Message ou User
+        pass
 
-        if not all_interactions_raw:
-            logger.info("No interactions found in Firebase.")
-            return jsonify([]), 200
+    query = query.order_by(desc('last_timestamp')).limit(limit)
+    results = query.all()
 
-        interactions = []
-        if isinstance(all_interactions_raw, dict):
-            for interaction_id, interaction_data in all_interactions_raw.items():
-                # --- START: ADIÇÃO PARA DEPURAÇÃO E TRATAMENTO DE ERRO DE DADOS MALFORMADOS ---
-                if not isinstance(interaction_data, dict):
-                    logger.error(f"Skipping malformed interaction: ID '{interaction_id}' contains data that is not a dictionary. Type: {type(interaction_data)}, Value: {interaction_data}")
-                    continue # Pula para a próxima interação no loop
-                # --- END: ADIÇÃO PARA DEPURAÇÃO E TRATAMENTO DE ERRO DE DADOS MALFORMADOS ---
+    interactions = []
+    for row in results:
+        last_message = Message.query.get(row.last_message_id)
+        user = last_message.user
+        interactions.append({
+            "id": row.session_id,
+            "user": user.email if user else "Unknown User",
+            "userId": user.id if user else None,
+            "message": last_message.content,
+            "timestamp": last_message.created_at.isoformat(),
+            "status": "responded"  # Exemplo, você pode mapear de outra forma
+        })
 
-                if 'user' in interaction_data and 'status' in interaction_data:
-                    last_message_content = ""
-                    last_message_timestamp = ""
-                    
-                    if 'messages' in interaction_data and isinstance(interaction_data['messages'], dict):
-                        temp_messages_list = []
-                        for msg_key, msg_value in interaction_data['messages'].items():
-                            if isinstance(msg_value, dict) and 'timestamp' in msg_value:
-                                msg_value['messageId'] = msg_key
-                                temp_messages_list.append(msg_value)
-                            else:
-                                logger.warning(f"Skipping malformed message in interaction '{interaction_id}' message key '{msg_key}': {msg_value}")
+    return jsonify(interactions), 200
 
-                        if temp_messages_list:
-                            temp_messages_list.sort(key=lambda x: datetime.fromisoformat(x['timestamp']), reverse=True)
-                            last_message = temp_messages_list[0]
-                            last_message_content = last_message.get('content', '')
-                            last_message_timestamp = last_message.get('timestamp', '')
-                        else:
-                            last_message_timestamp = interaction_data.get('timestamp', '')
-                            logger.warning(f"No valid messages found in interaction '{interaction_id}'. Using interaction timestamp if available: {last_message_timestamp}")
-                    elif 'messages' in interaction_data and isinstance(interaction_data['messages'], list):
-                        # Handle list case (less common for Firebase push keys, but possible)
-                        temp_messages_list = []
-                        for i, msg_value in enumerate(interaction_data['messages']):
-                            if msg_value and isinstance(msg_value, dict) and 'timestamp' in msg_value:
-                                msg_value['messageId'] = str(i)
-                                temp_messages_list.append(msg_value)
-                            else:
-                                logger.warning(f"Skipping malformed list message in interaction '{interaction_id}' index '{i}': {msg_value}")
-                        
-                        if temp_messages_list:
-                            temp_messages_list.sort(key=lambda x: datetime.fromisoformat(x['timestamp']), reverse=True)
-                            last_message = temp_messages_list[0]
-                            last_message_content = last_message.get('content', '')
-                            last_message_timestamp = last_message.get('timestamp', '')
-                        else:
-                            last_message_timestamp = interaction_data.get('timestamp', '')
-                            logger.warning(f"No valid messages found in interaction '{interaction_id}'. Using interaction timestamp if available: {last_message_timestamp}")
-                    else:
-                        last_message_timestamp = interaction_data.get('timestamp', '')
-                        logger.warning(f"Interaction '{interaction_id}' has no 'messages' sub-node or it's not a dict/list. Using interaction timestamp: {last_message_timestamp}")
+@app.route('/api/messages/<string:session_id>', methods=['GET'])
+def get_interaction_details(session_id):
+    messages = Message.query.filter_by(session_id=session_id).order_by(Message.created_at).all()
+    if not messages:
+        return jsonify({"error": "Interação/Ticket não encontrado."}), 404
 
+    user = messages[0].user if messages else None
 
-                    interactions.append({
-                        "id": interaction_id,
-                        "user": interaction_data.get('user', {}).get('name', 'Unknown User'),
-                        "userId": interaction_data.get('user', {}).get('id', ''),
-                        "message": last_message_content,
-                        "timestamp": last_message_timestamp if last_message_timestamp else datetime.now(timezone.utc).isoformat(), # Fallback to now if no valid timestamp
-                        "status": interaction_data.get('status', 'pending')
-                    })
-                else:
-                    logger.warning(f"Skipping malformed interaction entry with ID '{interaction_id}': Missing 'user' or 'status' fields. Data: {interaction_data}")
-
-
-        # Sort interactions by their (last) message timestamp in descending order (most recent first)
-        try:
-            sortable_interactions = []
-            non_sortable_interactions = []
-            for i in interactions:
-                if i['timestamp']:
-                    try:
-                        # Ensure timestamp has timezone info before sorting
-                        dt_obj = datetime.fromisoformat(i['timestamp'])
-                        if dt_obj.tzinfo is None:
-                            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
-                        i['parsed_timestamp'] = dt_obj # Store parsed for sorting
-                        sortable_interactions.append(i)
-                    except ValueError:
-                        logger.warning(f"Invalid timestamp format in interaction ID {i.get('id', 'N/A')}: {i['timestamp']}. Cannot sort.")
-                        non_sortable_interactions.append(i)
-                else:
-                    non_sortable_interactions.append(i)
-
-            sortable_interactions.sort(key=lambda x: x['parsed_timestamp'], reverse=True)
-            
-            # Remove the temporary 'parsed_timestamp' field before returning
-            for i in sortable_interactions:
-                i.pop('parsed_timestamp', None)
-            
-            messages_to_return = sortable_interactions + non_sortable_interactions
-        except Exception as e: # Captura erros gerais de ordenação, incluindo ValueErrors de fromisoformat
-            logger.error(f"Error during sorting of interactions: {e}. Check Firebase data structure and timestamp formats.")
-            return jsonify({"error": "Erro interno ao processar dados de interação: formato de 'timestamp' incorreto ou problema na ordenação."}), 500
-
-        filtered_messages_summary = []
-        start_collecting = not after_id
-
-        for interaction_summary in messages_to_return:
-            if after_id and interaction_summary['id'] == after_id:
-                start_collecting = True
-                continue
-
-            if not start_collecting:
-                continue
-
-            if status_filter and interaction_summary.get('status') != status_filter:
-                continue
-
-            filtered_messages_summary.append(interaction_summary)
-
-            if len(filtered_messages_summary) >= limit:
-                break
-
-        logger.info(f"Retrieved {len(filtered_messages_summary)} recent interaction summaries with limit={limit}, status={status_filter}, after_id={after_id}.")
-        return jsonify(filtered_messages_summary), 200
-
-    except ValueError as ve:
-        logger.error(f"Bad Request (validation error): {ve}")
-        return jsonify({"error": str(ve)}), 400
-    except Exception as e:
-        logger.error(f"Critical error listing recent messages: {e}", exc_info=True) # exc_info=True para stack trace
-        return jsonify({"error": "Erro crítico no servidor ao buscar as mensagens recentes. Verifique os logs do servidor."}), 500
-
-@app.route('/api/messages/<string:interactionId>', methods=['GET'])
-def get_interaction_details(interactionId):
-    """
-    Handles GET requests to /api/messages/{interactionId}.
-    Retrieves the complete message history for a specific interaction/ticket.
-    """
-    try:
-        # Fetch the specific interaction data from Firebase
-        interaction_data = messages_db_ref.child(interactionId).get()
-
-        if not interaction_data:
-            logger.warning(f"Interaction with ID '{interactionId}' not found in Firebase.")
-            return jsonify({"error": "Interação/Ticket não encontrado."}), 404
-
-        # Extract user information
-        user_info = interaction_data.get('user', {})
-        
-        # Extract status
-        status = interaction_data.get('status', 'unknown')
-
-        # Extract and format messages within the interaction
-        raw_messages = interaction_data.get('messages', {})
-        formatted_messages = []
-
-        if isinstance(raw_messages, dict):
-            for msg_id, msg_content in raw_messages.items():
-                if isinstance(msg_content, dict) and 'sender' in msg_content and 'timestamp' in msg_content and 'content' in msg_content:
-                    formatted_messages.append({
-                        "messageId": msg_id,
-                        "sender": msg_content['sender'],
-                        "timestamp": msg_content['timestamp'],
-                        "content": msg_content['content']
-                    })
-                else:
-                    logger.warning(f"Malformed message object in interaction '{interactionId}', skipping message ID '{msg_id}': {msg_content}")
-        elif isinstance(raw_messages, list):
-            # If Firebase somehow returned a list (e.g., if you used integer keys for messages)
-            for i, msg_content in enumerate(raw_messages):
-                 if msg_content and isinstance(msg_content, dict) and 'sender' in msg_content and 'timestamp' in msg_content and 'content' in msg_content:
-                    formatted_messages.append({
-                        "messageId": str(i), # Use index as messageId or generate unique
-                        "sender": msg_content['sender'],
-                        "timestamp": msg_content['timestamp'],
-                        "content": msg_content['content']
-                    })
-                 else:
-                    logger.warning(f"Malformed message object in interaction '{interactionId}' at index {i}, skipping: {msg_content}")
-        
-        # Sort messages by timestamp within the interaction
-        if formatted_messages:
-            try:
-                formatted_messages.sort(key=lambda x: datetime.fromisoformat(x['timestamp']))
-            except (KeyError, ValueError) as e:
-                logger.error(f"Error sorting messages for interaction '{interactionId}': {e}")
-                # Decide how to handle: send unsorted, filter out bad ones, or return error
-                # For now, we'll log and continue with potentially unsorted if there's a problem
-                pass 
-
-
-        response_data = {
-            "interactionId": interactionId,
-            "user": {
-                "name": user_info.get('name', 'Unknown'),
-                "id": user_info.get('id', ''),
-                "platform": user_info.get('platform', 'N/A')
-            },
-            "status": status,
-            "messages": formatted_messages
+    formatted_messages = [
+        {
+            "messageId": m.id,
+            "sender": m.role,
+            "timestamp": m.created_at.isoformat(),
+            "content": m.content
         }
+        for m in messages
+    ]
 
-        logger.info(f"Retrieved details for interaction ID '{interactionId}'.")
-        return jsonify(response_data), 200
-
-    except Exception as e:
-        logger.error(f"Error retrieving details for interaction ID '{interactionId}': {e}")
-        return jsonify({"error": "Erro no servidor ao buscar os detalhes da conversa."}), 500
+    return jsonify({
+        "interactionId": session_id,
+        "user": {
+            "name": user.email if user else "Unknown",
+            "id": user.id if user else None,
+        },
+        "status": "responded",  # Você pode criar campo de status se quiser
+        "messages": formatted_messages
+    }), 200
 
 @app.route('/api/users', methods=['GET'])
 def list_users():
-    """
-    Handles GET requests to /api/users.
-    Returns a list of users who interacted with the bot, with filtering and pagination.
-    """
-    try:
-        search_term = request.args.get('searchTerm', '').lower()
-        status_filter = request.args.get('status', '').lower()
-        limit = request.args.get('limit', type=int)
-        offset = request.args.get('offset', default=0, type=int)
+    search_term = request.args.get('searchTerm', '').lower()
+    limit = request.args.get('limit', type=int)
+    offset = request.args.get('offset', default=0, type=int)
 
-        if offset < 0:
-            return jsonify({"error": "O parâmetro 'offset' deve ser um número inteiro não negativo."}), 400
-        if limit is not None and limit <= 0:
-            return jsonify({"error": "O parâmetro 'limit' deve ser um número inteiro positivo."}), 400
+    query = User.query
 
-        valid_statuses = {'active', 'banned', ''} # Empty string allows all statuses if no filter
-        if status_filter and status_filter not in valid_statuses:
-            return jsonify({"error": f"O parâmetro 'status' é inválido. Valores possíveis: {', '.join(s for s in valid_statuses if s)}."}), 400
+    if search_term:
+        query = query.filter(
+            (func.lower(User.email).like(f"%{search_term}%"))
+        )
 
-        all_users_raw = users_db_ref.get()
+    query = query.order_by(User.email).offset(offset)
+    if limit:
+        query = query.limit(limit)
 
-        if not all_users_raw:
-            return jsonify([]), 200 # No users found
+    users = query.all()
+    return jsonify([
+        {
+            "id": u.id,
+            "name": u.email,
+            "status": "active"  # Se quiser, pode adicionar campo status
+        }
+        for u in users
+    ]), 200
+@app.route('/api/users/<int:user_id>/ban', methods=['POST'])
+def ban_user(user_id):
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
 
-        users_list = []
-        if isinstance(all_users_raw, dict):
-            for user_platform_id, user_data in all_users_raw.items():
-                if isinstance(user_data, dict) and 'name' in user_data and 'username' in user_data and 'userId' in user_data and 'status' in user_data:
-                    # 'id' is internal, 'userId' is platform ID. We'll use platform ID for consistency
-                    # or you can generate an internal ID if your system needs it.
-                    # For simplicity, using the Firebase key (user_platform_id) as the 'id' here.
-                    users_list.append({
-                        "id": user_platform_id, # Or user_data.get('id', user_platform_id) if stored
-                        "name": user_data.get('name', 'N/A'),
-                        "username": user_data.get('username', 'N/A'),
-                        "userId": user_data.get('userId', user_platform_id), # Telegram User ID
-                        "status": user_data.get('status', 'active'),
-                        "lastSeen": user_data.get('lastSeen', datetime.now().isoformat()),
-                        "messageCount": user_data.get('messageCount', 0)
-                    })
-                else:
-                    logger.warning(f"Skipping malformed user entry with ID '{user_platform_id}': {user_data}")
-        elif isinstance(all_users_raw, list):
-            # Less common for Firebase user lists, but handled
-            for i, user_data in enumerate(all_users_raw):
-                if user_data and isinstance(user_data, dict) and 'name' in user_data: # Basic check
-                    users_list.append({
-                        "id": str(i),
-                        "name": user_data.get('name', 'N/A'),
-                        "username": user_data.get('username', 'N/A'),
-                        "userId": user_data.get('userId', str(i)),
-                        "status": user_data.get('status', 'active'),
-                        "lastSeen": user_data.get('lastSeen', datetime.now().isoformat()),
-                        "messageCount": user_data.get('messageCount', 0)
-                    })
-                else:
-                    logger.warning(f"Skipping malformed user entry at index {i}: {user_data}")
+    # Aqui você precisa adicionar coluna `status` na model User
+    user.status = 'banned'
+    db.session.commit()
+    return jsonify({"message": "Usuário banido com sucesso.", "userId": user.id, "status": user.status})
 
 
-        # Apply filters
-        filtered_users = []
-        for user in users_list:
-            match_search = True
-            if search_term:
-                user_name = user.get('name', '').lower()
-                user_username = user.get('username', '').lower()
-                user_id = user.get('userId', '').lower()
-                if not (search_term in user_name or search_term in user_username or search_term in user_id):
-                    match_search = False
-            
-            match_status = True
-            if status_filter and user.get('status') != status_filter:
-                match_status = False
+@app.route('/api/users/<int:user_id>/unban', methods=['POST'])
+def unban_user(user_id):
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
 
-            if match_search and match_status:
-                filtered_users.append(user)
-        
-        # Sort users (e.g., by name or lastSeen for consistency)
-        # For simplicity, let's sort by name for now. You can adjust this.
-        filtered_users.sort(key=lambda x: x.get('name', '').lower())
-
-        # Apply pagination
-        paginated_users = filtered_users[offset:]
-        if limit is not None:
-            paginated_users = paginated_users[:limit]
-
-        logger.info(f"Retrieved {len(paginated_users)} users with searchTerm='{search_term}', status='{status_filter}', limit={limit}, offset={offset}.")
-        return jsonify(paginated_users), 200
-
-    except ValueError as ve:
-        logger.error(f"Bad Request: {ve}")
-        return jsonify({"error": str(ve)}), 400
-    except Exception as e:
-        logger.error(f"Error listing users: {e}")
-        return jsonify({"error": "Erro no servidor ao buscar a lista de usuários."}), 500
-
-@app.route('/api/users/<string:userId>/ban', methods=['POST'])
-def ban_user(userId):
-    """
-    Handles POST requests to /api/users/{userId}/ban.
-    Marks a user as banned in Firebase and includes a placeholder for platform-specific banning.
-    """
-    try:
-        user_ref = users_db_ref.child(userId)
-        user_data = user_ref.get()
-
-        if not user_data:
-            logger.warning(f"Ban request for non-existent user ID: '{userId}'.")
-            return jsonify({"error": "Usuário não encontrado."}), 404
-
-        if user_data.get('status') == 'banned':
-            logger.info(f"User ID '{userId}' is already banned.")
-            return jsonify({
-                "message": "Usuário já está banido.",
-                "userId": userId,
-                "status": "banned"
-            }), 200 # Or 400 if you prefer to enforce no-op for already banned users
-
-        # Update user status in Firebase
-        update_data = {"status": "banned"}
-        
-        request_body = request.get_json(silent=True)
-        reason = None
-        duration = None
-
-        if request_body:
-            reason = request_body.get('reason')
-            duration = request_body.get('duration')
-            if reason:
-                update_data["banReason"] = reason
-            if duration:
-                update_data["banDuration"] = duration
-        
-        user_ref.update(update_data)
-        logger.info(f"User ID '{userId}' status updated to 'banned' in Firebase. Reason: '{reason}', Duration: '{duration}'.")
-
-        # --- Placeholder for platform-specific banning logic ---
-        # This is where you would integrate with your bot's platform API (e.g., Telegram Bot API)
-        # to actually ban the user from a channel or group.
-        #
-        # Example (conceptual):
-        # try:
-        #     if user_data.get('platform') == 'Telegram':
-        #         # Call Telegram Bot API to ban user
-        #         # telegram_api.ban_chat_member(chat_id=YOUR_CHANNEL_ID, user_id=userId)
-        #         logger.info(f"Attempted to ban Telegram user '{userId}' on platform.")
-        #     elif user_data.get('platform') == 'Discord':
-        #         # Call Discord API to ban user
-        #         # discord_api.ban_guild_member(guild_id=YOUR_GUILD_ID, user_id=userId)
-        #         logger.info(f"Attempted to ban Discord user '{userId}' on platform.")
-        #     else:
-        #         logger.warning(f"No platform-specific ban logic for user '{userId}' on platform '{user_data.get('platform')}'")
-        # except Exception as platform_e:
-        #     logger.error(f"Failed to ban user '{userId}' on platform API: {platform_e}")
-        #     # You might want to revert Firebase status or flag this as a partial failure
-        #     # return jsonify({"error": "Usuário banido no sistema, mas falha ao banir na plataforma."}), 500
-        # ----------------------------------------------------
-
-        return jsonify({
-            "message": "Usuário banido com sucesso.",
-            "userId": userId,
-            "status": "banned"
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error banning user '{userId}': {e}")
-        return jsonify({"error": "Erro no servidor ao banir o usuário."}), 500
-
-@app.route('/api/users/<string:userId>/unban', methods=['POST'])
-def unban_user(userId):
-    """
-    Handles POST requests to /api/users/{userId}/unban.
-    Removes the banned status from a user in Firebase and includes a placeholder for platform-specific unbanning.
-    """
-    try:
-        user_ref = users_db_ref.child(userId)
-        user_data = user_ref.get()
-
-        if not user_data:
-            logger.warning(f"Unban request for non-existent user ID: '{userId}'.")
-            return jsonify({"error": "Usuário não encontrado."}), 404
-
-        if user_data.get('status') == 'active':
-            logger.info(f"User ID '{userId}' is already active (not banned).")
-            return jsonify({
-                "message": "Usuário já está ativo (não banido).",
-                "userId": userId,
-                "status": "active"
-            }), 200 # Or 400 if you prefer to enforce no-op for already active users
-
-        # Update user status in Firebase to 'active'
-        update_data = {"status": "active"}
-        
-        # Optionally remove ban reason and duration if they exist
-        if "banReason" in user_data:
-            update_data["banReason"] = None # Set to None to remove the field
-        if "banDuration" in user_data:
-            update_data["banDuration"] = None # Set to None to remove the field
-        
-        user_ref.update(update_data)
-        logger.info(f"User ID '{userId}' status updated to 'active' in Firebase.")
-
-        # --- Placeholder for platform-specific unbanning logic ---
-        # This is where you would integrate with your bot's platform API (e.g., Telegram Bot API)
-        # to actually unban the user from a channel or group.
-        #
-        # Example (conceptual):
-        # try:
-        #     if user_data.get('platform') == 'Telegram':
-        #         # Call Telegram Bot API to unban user (e.g., unbanChatMember or similar)
-        #         # telegram_api.unban_chat_member(chat_id=YOUR_CHANNEL_ID, user_id=userId)
-        #         logger.info(f"Attempted to unban Telegram user '{userId}' on platform.")
-        #     elif user_data.get('platform') == 'Discord':
-        #         # Call Discord API to unban user (e.g., unban_guild_member)
-        #         # discord_api.unban_guild_member(guild_id=YOUR_GUILD_ID, user_id=userId)
-        #         logger.info(f"Attempted to unban Discord user '{userId}' on platform.")
-        #     else:
-        #         logger.warning(f"No platform-specific unban logic for user '{userId}' on platform '{user_data.get('platform')}'")
-        # except Exception as platform_e:
-        #     logger.error(f"Failed to unban user '{userId}' on platform API: {platform_e}")
-        #     # You might want to revert Firebase status or flag this as a partial failure
-        #     # return jsonify({"error": "Usuário desbanido no sistema, mas falha ao desbanir na plataforma."}), 500
-        # ----------------------------------------------------
-
-        return jsonify({
-            "message": "Usuário desbanido com sucesso.",
-            "userId": userId,
-            "status": "active"
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error unbanning user '{userId}': {e}")
-        return jsonify({"error": "Erro no servidor ao desbanir o usuário."}), 500
+    user.status = 'active'
+    db.session.commit()
+    return jsonify({"message": "Usuário desbanido com sucesso.", "userId": user.id, "status": user.status})
 
 @app.route('/api/metrics/realtime', methods=['GET'])
 def get_realtime_metrics():
-    """
-    Handles GET requests to /api/metrics/realtime.
-    Provides aggregated real-time data about bot activity.
-    """
     try:
-        now = datetime.now(timezone.utc) # Use timezone-aware datetime for comparison
+        now = datetime.now(timezone.utc)
         one_hour_ago = now - timedelta(hours=1)
         fifteen_minutes_ago = now - timedelta(minutes=15)
 
-        all_interactions_raw = messages_db_ref.get()
-        all_users_raw = users_db_ref.get()
+        # 1) messages in last hour
+        messages_in_last_hour = Message.query.filter(Message.created_at >= one_hour_ago).count()
 
-        messages_in_last_hour = 0
-        online_users_ids = set()
+        # 2) online users (last_seen within 15 minutes)
+        online_users_count = User.query.filter(User.last_seen != None).filter(User.last_seen >= fifteen_minutes_ago).count()
+
+        # 3) average response time (pair user -> assistant (Alfred) within same session)
         total_response_time = 0.0
         response_count = 0
 
-        if isinstance(all_interactions_raw, dict):
-            for interaction_id, interaction_data in all_interactions_raw.items():
-                if isinstance(interaction_data, dict) and 'messages' in interaction_data:
-                    user_id = interaction_data.get('user', {}).get('id')
-                    
-                    if isinstance(interaction_data['messages'], (dict, list)):
-                        messages_in_interaction = []
-                        if isinstance(interaction_data['messages'], dict):
-                            messages_in_interaction = list(interaction_data['messages'].values())
-                        elif isinstance(interaction_data['messages'], list):
-                            messages_in_interaction = [msg for msg in interaction_data['messages'] if msg is not None]
+        # Query messages ordered by session_id and created_at to group them in Python
+        msgs = Message.query.order_by(Message.session_id, Message.created_at).all()
+        from collections import defaultdict
+        sessions = defaultdict(list)
+        for m in msgs:
+            sessions[m.session_id].append(m)
 
-                        for msg in messages_in_interaction:
-                            if isinstance(msg, dict) and 'timestamp' in msg and 'sender' in msg and 'content' in msg:
-                                try:
-                                    msg_timestamp = datetime.fromisoformat(msg['timestamp'])
-                                    # Ensure timestamp is timezone-aware, assume UTC if not specified
-                                    if msg_timestamp.tzinfo is None:
-                                        msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
+        for session_id, mlist in sessions.items():
+            # mlist already sorted by created_at due to query order_by
+            for i, m in enumerate(mlist):
+                if m.role == 'user':
+                    user_msg_time = m.created_at.replace(tzinfo=timezone.utc) if m.created_at.tzinfo is None else m.created_at
+                    # find next assistant message after this user message
+                    for subsequent in mlist[i+1:]:
+                        if subsequent.role == 'assistant':
+                            alfred_msg_time = subsequent.created_at.replace(tzinfo=timezone.utc) if subsequent.created_at.tzinfo is None else subsequent.created_at
+                            if alfred_msg_time > user_msg_time:
+                                time_diff = (alfred_msg_time - user_msg_time).total_seconds()
+                                if time_diff >= 0:
+                                    total_response_time += time_diff
+                                    response_count += 1
+                                break
 
-                                    if msg_timestamp >= one_hour_ago:
-                                        messages_in_last_hour += 1
-                                    
-                                    if msg_timestamp >= fifteen_minutes_ago and user_id:
-                                        online_users_ids.add(user_id)
-
-                                    # Calculate response time
-                                    if msg['sender'] == 'user':
-                                        user_msg_time = msg_timestamp
-                                        # Look for the immediate next message from 'Alfred' in the same interaction
-                                        for subsequent_msg in messages_in_interaction:
-                                            if isinstance(subsequent_msg, dict) and 'timestamp' in subsequent_msg and 'sender' in subsequent_msg and subsequent_msg['sender'] == 'Alfred':
-                                                alfred_msg_time = datetime.fromisoformat(subsequent_msg['timestamp'])
-                                                if alfred_msg_time.tzinfo is None:
-                                                    alfred_msg_time = alfred_msg_time.replace(tzinfo=timezone.utc)
-                                                
-                                                if alfred_msg_time > user_msg_time:
-                                                    time_diff = (alfred_msg_time - user_msg_time).total_seconds()
-                                                    if time_diff >= 0: # Ensure positive response time
-                                                        total_response_time += time_diff
-                                                        response_count += 1
-                                                        break # Found response for this user message, move to next user message
-                                except ValueError as ve:
-                                    logger.warning(f"Invalid timestamp format in message: {msg.get('timestamp', 'N/A')} - {ve}")
-                            else:
-                                logger.warning(f"Skipping malformed message entry in interaction '{interaction_id}': {msg}")
-                else:
-                    logger.warning(f"Skipping malformed messages structure in interaction '{interaction_id}': {interaction_data.get('messages')}")
-
-
-        online_users_count = len(online_users_ids)
         average_response_time = total_response_time / response_count if response_count > 0 else 0.0
 
         metrics = {
@@ -1033,17 +613,13 @@ def get_realtime_metrics():
         return jsonify(metrics), 200
 
     except Exception as e:
-        logger.error(f"Error getting real-time metrics: {e}")
+        logger.error(f"Error getting real-time metrics: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao calcular ou buscar as métricas."}), 500
 
 @app.route('/api/activities', methods=['GET'])
 def list_activities():
-    """
-    Handles GET requests to /api/activities.
-    Returns a paginated and filterable list of all recorded bot activities.
-    """
     try:
-        # Parse query parameters
+        # Query params
         limit = request.args.get('limit', type=int)
         offset = request.args.get('offset', default=0, type=int)
         activity_type_filter = request.args.get('type')
@@ -1052,7 +628,7 @@ def list_activities():
         end_date_str = request.args.get('endDate')
         search_term = request.args.get('searchTerm', '').lower()
 
-        # Input validation
+        # validation
         if offset < 0:
             return jsonify({"error": "O parâmetro 'offset' deve ser um número inteiro não negativo."}), 400
         if limit is not None and limit <= 0:
@@ -1083,209 +659,152 @@ def list_activities():
                     end_date = end_date.replace(tzinfo=timezone.utc)
             except ValueError:
                 return jsonify({"error": "Formato de 'endDate' inválido. Use ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)."}), 400
-        
+
         if start_date and end_date and start_date > end_date:
             return jsonify({"error": "'startDate' não pode ser posterior a 'endDate'."}), 400
 
-
         all_activities = []
-        activity_id_counter = 0 # Simple counter for unique activity IDs
+        activity_id_counter = 0
 
-        # --- 1. Gather activities from Firebase Messages ---
-        all_interactions_raw = messages_db_ref.get()
-        if isinstance(all_interactions_raw, dict):
-            for interaction_id, interaction_data in all_interactions_raw.items():
-                if isinstance(interaction_data, dict) and 'messages' in interaction_data:
-                    user_name = interaction_data.get('user', {}).get('name', 'Unknown User')
-                    user_id = interaction_data.get('user', {}).get('id', 'N/A')
-                    
-                    if isinstance(interaction_data['messages'], (dict, list)):
-                        messages_in_interaction = []
-                        if isinstance(interaction_data['messages'], dict):
-                            messages_in_interaction = list(interaction_data['messages'].values())
-                        elif isinstance(interaction_data['messages'], list):
-                            messages_in_interaction = [msg for msg in interaction_data['messages'] if msg is not None]
+        # --- 1. Activities from Messages ---
+        # We'll load messages grouped by session_id and create activity per message (user/assistant)
+        msgs = Message.query.order_by(Message.session_id, Message.created_at).all()
+        from collections import defaultdict
+        sessions = defaultdict(list)
+        for m in msgs:
+            sessions[m.session_id].append(m)
 
-                        for msg_idx, msg in enumerate(messages_in_interaction):
-                            if isinstance(msg, dict) and 'timestamp' in msg and 'sender' in msg and 'content' in msg:
-                                try:
-                                    msg_timestamp = datetime.fromisoformat(msg['timestamp'])
-                                    if msg_timestamp.tzinfo is None:
-                                        msg_timestamp = msg_timestamp.replace(tzinfo=timezone.utc)
+        for session_id, mlist in sessions.items():
+            # resolve user name (try first message user)
+            session_user_name = None
+            session_user_platform_id = None
+            for m in mlist:
+                if m.user_id:
+                    u = User.query.get(m.user_id)
+                    if u:
+                        session_user_name = u.name or u.email
+                        session_user_platform_id = u.platform_id
+                        break
 
-                                    activity_id_counter += 1
-                                    activity_id = f"msg_{interaction_id}_{msg_idx}"
-                                    
-                                    activity = {
-                                        "id": activity_id,
-                                        "timestamp": msg_timestamp.isoformat(),
-                                        "status": "success", # Assuming message processing is usually successful
-                                    }
+            for idx, m in enumerate(mlist):
+                activity_id_counter += 1
+                timestamp = m.created_at
+                # normalize tz
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
 
-                                    if msg['sender'] == 'user':
-                                        activity["type"] = "message"
-                                        activity["user"] = user_name
-                                        activity["action"] = "Enviou mensagem"
-                                        activity["details"] = f"Usuário '{user_name}' ({user_id}) enviou: {msg['content'][:100]}..." if len(msg['content']) > 100 else f"Usuário '{user_name}' ({user_id}) enviou: {msg['content']}"
-                                    elif msg['sender'] == 'Alfred':
-                                        activity["type"] = "response"
-                                        activity["user"] = "Alfred (Bot)"
-                                        activity["action"] = "Respondeu à mensagem"
-                                        activity["details"] = f"Alfred respondeu a '{user_name}' ({user_id}): {msg['content'][:100]}..." if len(msg['content']) > 100 else f"Alfred respondeu a '{user_name}' ({user_id}): {msg['content']}"
-                                    else:
-                                        # Skip unknown senders
-                                        continue
-                                    
-                                    all_activities.append(activity)
-                                except ValueError as ve:
-                                    logger.warning(f"Skipping activity from malformed timestamp in message: {msg.get('timestamp', 'N/A')} - {ve}")
-                            else:
-                                logger.warning(f"Skipping malformed message object within interaction '{interaction_id}': {msg}")
-                    else:
-                        logger.warning(f"Skipping malformed messages structure in interaction '{interaction_id}': {interaction_data['messages']}")
+                if m.role == 'user':
+                    activity = {
+                        "id": f"msg_{session_id}_{idx}",
+                        "timestamp": timestamp.isoformat(),
+                        "status": "success",
+                        "type": "message",
+                        "user": session_user_name or "Unknown User",
+                        "action": "Enviou mensagem",
+                        "details": (m.content[:100] + "...") if len(m.content) > 100 else m.content
+                    }
+                elif m.role == 'assistant':
+                    activity = {
+                        "id": f"resp_{session_id}_{idx}",
+                        "timestamp": timestamp.isoformat(),
+                        "status": "success",
+                        "type": "response",
+                        "user": "Alfred (Bot)",
+                        "action": "Respondeu à mensagem",
+                        "details": (m.content[:100] + "...") if len(m.content) > 100 else m.content
+                    }
                 else:
-                    logger.warning(f"Skipping malformed interaction entry: {interaction_id}")
+                    # Ignora roles desconhecidos
+                    continue
 
-        # --- 2. Gather activities from Firebase Users (for ban/unban status changes) ---
-        # Note: This gives current status. A true log would require historical data.
-        all_users_raw = users_db_ref.get()
-        if isinstance(all_users_raw, dict):
-            for user_platform_id, user_data in all_users_raw.items():
-                if isinstance(user_data, dict):
-                    activity_id_counter += 1
-                    user_name = user_data.get('name', 'N/A')
-                    user_status = user_data.get('status', 'active')
-                    last_seen_str = user_data.get('lastSeen') # Using lastSeen as a proxy for timestamp
+                all_activities.append(activity)
 
-                    if user_status == 'banned':
-                        ban_reason = user_data.get('banReason', 'Motivo não especificado')
-                        ban_duration = user_data.get('banDuration', 'Não especificada')
-                        timestamp = last_seen_str if last_seen_str else datetime.now(timezone.utc).isoformat()
-                        
-                        all_activities.append({
-                            "id": f"ban_{user_platform_id}_{activity_id_counter}",
-                            "type": "ban",
-                            "user": user_name,
-                            "action": "Usuário Banido",
-                            "details": f"Usuário '{user_name}' ({user_platform_id}) foi banido. Motivo: '{ban_reason}'. Duração: '{ban_duration}'.",
-                            "timestamp": timestamp,
-                            "status": "warning" # Or success, depending on your perspective
-                        })
-                    # We can't reliably infer 'unban' events without historical data.
-                    # This would need to be logged when the unban API call happens.
+        # --- 2. Activities from Users (ban/unban) ---
+        banned_users = User.query.filter(User.status == 'banned').all()
+        for u in banned_users:
+            activity_id_counter += 1
+            timestamp = u.last_seen or datetime.now(timezone.utc)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            all_activities.append({
+                "id": f"ban_{u.id}_{activity_id_counter}",
+                "type": "ban",
+                "user": u.name or u.email or f"user_{u.id}",
+                "action": "Usuário Banido",
+                "details": f"Motivo: '{u.ban_reason or 'N/A'}'. Duração: '{u.ban_duration or 'N/A'}'.",
+                "timestamp": timestamp.isoformat(),
+                "status": "warning"
+            })
 
-        # --- 3. Gather activities from Alfred Files Metadata (uploads/deletions) ---
-        if os.path.exists(METADATA_FILE_PATH):
-            with open(METADATA_FILE_PATH, 'r') as f:
-                try:
-                    file_metadata = json.load(f)
-                    for file_id, file_info in file_metadata.items():
-                        activity_id_counter += 1
-                        uploaded_at_str = file_info.get("uploaded_at")
-                        original_file_name = file_info.get("originalFileName", file_id)
-                        
-                        if uploaded_at_str:
-                            try:
-                                timestamp = datetime.fromisoformat(uploaded_at_str)
-                                if timestamp.tzinfo is None:
-                                    timestamp = timestamp.replace(tzinfo=timezone.utc)
-                                all_activities.append({
-                                    "id": f"file_upload_{file_id}_{activity_id_counter}",
-                                    "type": "file",
-                                    "user": "Sistema (Admin)", # Assuming uploads are by admins
-                                    "action": "Arquivo Carregado",
-                                    "details": f"Arquivo '{original_file_name}' ({file_id}) carregado para a base de conhecimento de Alfred.",
-                                    "timestamp": timestamp.isoformat(),
-                                    "status": "success"
-                                })
-                            except ValueError as ve:
-                                logger.warning(f"Skipping activity from malformed timestamp in file metadata: {uploaded_at_str} - {ve}")
-                except json.JSONDecodeError:
-                    logger.warning(f"Metadata file '{METADATA_FILE_PATH}' is empty or corrupted. Skipping file activities.")
-        
-        # Note: Deletions would require comparing current metadata with previous state or explicit logging.
-        # For a truly accurate log, deletions should trigger a log entry at the time of deletion.
+        # --- 3. Activities from Alfred Files (uploads) ---
+        files = AlfredFile.query.order_by(AlfredFile.uploaded_at.desc()).all()
+        for f in files:
+            activity_id_counter += 1
+            ts = f.uploaded_at or datetime.now(timezone.utc)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            all_activities.append({
+                "id": f"file_upload_{f.id}_{activity_id_counter}",
+                "type": "file",
+                "user": f.uploaded_by_user_id and (User.query.get(f.uploaded_by_user_id).name or User.query.get(f.uploaded_by_user_id).email) or "Sistema (Admin)",
+                "action": "Arquivo Carregado",
+                "details": f"Arquivo '{f.original_filename}' ({f.unique_filename}) carregado.",
+                "timestamp": ts.isoformat(),
+                "status": "success"
+            })
 
-
-        # --- 4. Apply Filters ---
+        # --- 4. Apply Filters (date, type, status, search) ---
         filtered_activities = []
         for activity in all_activities:
             activity_timestamp = datetime.fromisoformat(activity['timestamp'])
-            
-            # Ensure activity_timestamp is timezone-aware for comparison
             if activity_timestamp.tzinfo is None:
                 activity_timestamp = activity_timestamp.replace(tzinfo=timezone.utc)
 
-            # Date range filter
             if start_date and activity_timestamp < start_date:
                 continue
             if end_date and activity_timestamp > end_date:
                 continue
-
-            # Type filter
             if activity_type_filter and activity['type'] != activity_type_filter:
                 continue
-
-            # Status filter
-            if status_filter and activity['status'] != status_filter:
+            if status_filter and activity.get('status') != status_filter:
                 continue
 
-            # Search term filter
             if search_term:
-                user_match = search_term in activity.get('user', '').lower()
-                action_match = search_term in activity.get('action', '').lower()
-                details_match = search_term in activity.get('details', '').lower()
+                user_match = search_term in (activity.get('user') or '').lower()
+                action_match = search_term in (activity.get('action') or '').lower()
+                details_match = search_term in (activity.get('details') or '').lower()
                 if not (user_match or action_match or details_match):
                     continue
-            
+
             filtered_activities.append(activity)
 
-        # --- 5. Sort Activities (most recent first) ---
-        try:
-            filtered_activities.sort(key=lambda x: datetime.fromisoformat(x['timestamp']), reverse=True)
-        except ValueError as e:
-            logger.error(f"Error sorting activities by timestamp: {e}")
-            # If sorting fails due to bad timestamps, we can still return unsorted,
-            # but it's better to ensure data quality.
+        # sort descending by timestamp
+        filtered_activities.sort(key=lambda x: datetime.fromisoformat(x['timestamp']), reverse=True)
 
-        # --- 6. Apply Pagination ---
+        # pagination
         total_activities = len(filtered_activities)
-        paginated_activities = filtered_activities[offset:]
+        paginated = filtered_activities[offset:]
         if limit is not None:
-            paginated_activities = paginated_activities[:limit]
+            paginated = paginated[:limit]
 
-        logger.info(f"Retrieved {len(paginated_activities)} activities (total filtered: {total_activities}) with filters: {request.args}.")
-
-        return jsonify({
-            "total": total_activities,
-            "activities": paginated_activities
-        }), 200
+        logger.info(f"Retrieved {len(paginated)} activities (total filtered: {total_activities}) with filters: {request.args}.")
+        return jsonify({"total": total_activities, "activities": paginated}), 200
 
     except ValueError as ve:
-        logger.error(f"Bad Request for activities: {ve}")
+        logger.error(f"Bad Request for activities: {ve}", exc_info=True)
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
-        logger.error(f"Error listing activities: {e}")
+        logger.error(f"Error listing activities: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao buscar o log de atividades."}), 500
 
 @app.route('/api/activities', methods=['DELETE'])
 def clear_activities():
-    """
-    Handles DELETE requests to /api/activities.
-    Deletes a subset of activities from the log based on filters.
-    Currently, this only affects the 'messages' collection in Firebase.
-    """
     try:
-        # Check for authorization here if you have an admin user system
-        # For example: if not is_admin_user(request.headers.get('Authorization')):
-        #     return jsonify({"error": "Usuário não autorizado a limpar o log."}), 403
-
         before_date_str = request.args.get('beforeDate')
-        status_filter = request.args.get('status') # This filter is tricky for deleting messages
+        status_filter = request.args.get('status')
 
         deleted_count = 0
 
-        # Validate beforeDate
         before_date = None
         if before_date_str:
             try:
@@ -1295,108 +814,50 @@ def clear_activities():
             except ValueError:
                 return jsonify({"error": "Formato de 'beforeDate' inválido. Use ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)."}), 400
 
-        # Validate status filter (only relevant if you're deleting specific types of activities with explicit statuses)
-        # For messages, the status is usually 'success' or 'pending/responded' based on interaction status.
-        # This delete operation mainly focuses on message age, not their interaction status.
-        # So, if a status filter is provided, it might not yield expected results for message deletion directly.
-        valid_statuses = {'success', 'warning', 'info', 'error', None} # Adding None for no filter
+        valid_statuses = {'success', 'warning', 'info', 'error', None}
         if status_filter and status_filter not in valid_statuses:
             return jsonify({"error": f"O status de atividade '{status_filter}' é inválido para exclusão. Valores possíveis: {', '.join(s for s in valid_statuses if s)}."}), 400
 
+        # --- Delete message interactions whose earliest message is before before_date ---
+        if before_date:
+            # Encontrar session_ids com earliest message < before_date
+            session_earliest = db.session.query(
+                Message.session_id,
+                func.min(Message.created_at).label('earliest')
+            ).group_by(Message.session_id).having(func.min(Message.created_at) < before_date).all()
 
-        # --- Deleting from Firebase Messages Collection ---
-        # Get all interactions to filter locally
-        all_interactions_raw = messages_db_ref.get()
-        interactions_to_delete = []
+            session_ids_to_delete = [row.session_id for row in session_earliest]
+            if session_ids_to_delete:
+                # delete messages
+                del_q = Message.__table__.delete().where(Message.session_id.in_(session_ids_to_delete))
+                res = db.session.execute(del_q)
+                deleted_count += res.rowcount if hasattr(res, 'rowcount') else 0
+                db.session.commit()
+                logger.info(f"Deleted {len(session_ids_to_delete)} interactions (sessions) from messages.")
 
-        if isinstance(all_interactions_raw, dict):
-            for interaction_id, interaction_data in all_interactions_raw.items():
-                if isinstance(interaction_data, dict) and 'messages' in interaction_data:
-                    # Collect message timestamps to determine if interaction should be deleted
-                    earliest_message_timestamp = None
-                    
-                    if isinstance(interaction_data['messages'], (dict, list)):
-                        messages_in_interaction = []
-                        if isinstance(interaction_data['messages'], dict):
-                            messages_in_interaction = list(interaction_data['messages'].values())
-                        elif isinstance(interaction_data['messages'], list):
-                            messages_in_interaction = [msg for msg in interaction_data['messages'] if msg is not None]
+            # --- Delete AlfredFile metadata older than before_date ---
+            files_to_delete = AlfredFile.query.filter(AlfredFile.uploaded_at < before_date).all()
+            for f in files_to_delete:
+                # opcional: deletar arquivo no disco se desejar:
+                # try:
+                #     if os.path.exists(f.local_path):
+                #         os.remove(f.local_path)
+                # except Exception as ex:
+                #     logger.warning(f"Erro ao remover arquivo local {f.local_path}: {ex}")
+                db.session.delete(f)
+                deleted_count += 1
+            db.session.commit()
 
-                        if messages_in_interaction:
-                            # Find the earliest message timestamp in the interaction
-                            try:
-                                # Sort by timestamp to find the earliest
-                                messages_in_interaction.sort(key=lambda x: datetime.fromisoformat(x.get('timestamp', '1970-01-01T00:00:00Z')))
-                                earliest_message_timestamp = datetime.fromisoformat(messages_in_interaction[0].get('timestamp'))
-                                if earliest_message_timestamp.tzinfo is None:
-                                    earliest_message_timestamp = earliest_message_timestamp.replace(tzinfo=timezone.utc)
-                            except (KeyError, ValueError) as e:
-                                logger.warning(f"Could not determine earliest timestamp for interaction {interaction_id}: {e}. Skipping deletion for this interaction based on date.")
-                                earliest_message_timestamp = None # Cannot filter by date, so skip this interaction for date-based deletion
+        # Note: Status-based deletion not implemented com precisão porque 'status'
+        # não é um campo direto nas mensagens; precisa de model Activity ou marcação na Message.
+        # Por enquanto, beforeDate é o principal filtro.
 
-
-                    # If a beforeDate is provided and the earliest message in this interaction is older,
-                    # mark the entire interaction for deletion.
-                    # Note: We are deleting entire interactions, not individual messages within an interaction,
-                    # because Firebase Realtime Database is tree-based. Deleting individual messages would be more complex
-                    # and potentially leave empty interaction nodes.
-                    if before_date and earliest_message_timestamp and earliest_message_timestamp < before_date:
-                        interactions_to_delete.append(interaction_id)
-                    # For status_filter, it's hard to apply to entire interactions here
-                    # as 'success' is the default for messages, and interaction status is 'pending/responded'.
-                    # This would require more sophisticated logic if you want to delete based on `interaction.status`.
-                    # For simplicity, we're primarily using `beforeDate` for message log clearing.
-
-
-        # Perform deletion
-        for interaction_id in interactions_to_delete:
-            messages_db_ref.child(interaction_id).delete()
-            deleted_count += 1
-            logger.info(f"Deleted interaction '{interaction_id}' from Firebase 'messages'.")
-
-
-        # --- Deleting from Alfred Files Metadata ---
-        # This would require logic to remove entries from your alfred_files_metadata.json
-        # and potentially the actual files. This is not implemented here to keep the focus on messages
-        # and because it's a separate type of data store (local file vs. Firebase).
-        # Example for metadata.json if beforeDate was applicable:
-        # if os.path.exists(METADATA_FILE_PATH):
-        #     with open(METADATA_FILE_PATH, 'r') as f:
-        #         try:
-        #             metadata = json.load(f)
-        #             keys_to_delete = []
-        #             for file_id, file_info in metadata.items():
-        #                 uploaded_at_str = file_info.get("uploaded_at")
-        #                 if uploaded_at_str:
-        #                     try:
-        #                         uploaded_at = datetime.fromisoformat(uploaded_at_str)
-        #                         if uploaded_at.tzinfo is None:
-        #                             uploaded_at = uploaded_at.replace(tzinfo=timezone.utc)
-        #                         if before_date and uploaded_at < before_date:
-        #                             keys_to_delete.append(file_id)
-        #                     except ValueError:
-        #                         logger.warning(f"Skipping file metadata with malformed timestamp: {uploaded_at_str}")
-        #             for key in keys_to_delete:
-        #                 # Add logic to delete actual file too if desired
-        #                 # os.remove(os.path.join(UPLOAD_FOLDER, key))
-        #                 del metadata[key]
-        #                 deleted_count += 1 # If counting file deletions
-        #             with open(METADATA_FILE_PATH, 'w') as f:
-        #                 json.dump(metadata, f, indent=4)
-        #         except json.JSONDecodeError:
-        #             logger.warning("Metadata file corrupted, cannot delete entries.")
-
-
-        logger.info(f"Activity log clear operation completed. {deleted_count} records (interactions) deleted from messages collection.")
-        return jsonify({
-            "message": "Log de atividades limpo com sucesso.",
-            "deletedCount": deleted_count
-        }), 200
+        logger.info(f"Activity log clear operation completed. deletedCount={deleted_count}")
+        return jsonify({"message": "Log de atividades limpo com sucesso.", "deletedCount": deleted_count}), 200
 
     except Exception as e:
-        logger.error(f"Error clearing activities: {e}")
+        logger.error(f"Error clearing activities: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao limpar o log de atividades."}), 500
-
 
 
 @app.route('/api/dashboard/stats', methods=['GET'])
@@ -1690,7 +1151,7 @@ def initialize_agent():
     if not platform:
         return jsonify({"message": "Platform é obrigatório."}), 400
 
-    if platform not in ['discord', 'telegram']:
+    if platform not in ['discord', 'telegram', 'whatsapp']:
         return jsonify({"message": "Plataforma inválida. Use 'discord' ou 'telegram'."}), 400
 
     try:

@@ -1,3 +1,4 @@
+# Back-End\WhatsApp.py
 import os
 import requests
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from firebase_admin import db
 from Modules.Loggers.logger import setup_logger 
 from AssistantSupport.ai import Alfred
 from Keys.Firebase.FirebaseApp import init_firebase
+from Modules.Models.postgressSQL import db as db_postgress, User, Message, Config, AlfredFile, AgentStatus
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'Keys', 'keys.env'))
 
@@ -21,19 +23,18 @@ active_interactions = {}
 wa_status_ref   = db.reference('alfred_status/WhatsAppEvolution', app=app_1)
 messages_db_ref = db.reference('messages', app=app_1)
 configurations_db_ref = db.reference('configurations', app=app_1) 
-wa_status_ref = db.reference('alfred_status/WhatsApp', app=app_1)
-wa_status_ref.set({
-    "status": "online",
-    "last_update": datetime.now(timezone.utc).isoformat(),
-    "image_name": "whatsapp-server:latest",
-    "container_name": "alfred-whatsapp-agent"
-})
+
+
 data = configurations_db_ref.get()
 SERVER_URL = data.get("waServerUrl") 
 INSTANCE_NAME =  data.get("waInstanceId")
 API_KEY = data.get("waApiKey") 
 GROUP_JID =  data.get("waSupportGroupJid")
-
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'Knowledge')
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+    log.info(f"Created upload directory: {UPLOAD_FOLDER}")
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
     data = await request.json()
@@ -68,27 +69,19 @@ async def whatsapp_webhook(request: Request):
         log.info(f"WhatsApp_message: {wats_message}")
         user_info = _get_user_info(pushName, sender, chat_id) # <-- PEGA O DICIONÁRIO DE INFORMAÇÕES
 
-        interaction_id = active_interactions.get(chat_id)
+        _update_interaction_status_postgres(chat_id, "pending")
 
-        if not interaction_id:
-            new_interaction_ref = messages_db_ref.push({
-                "user": user_info,  # <-- AGORA USA O DICIONÁRIO COMPLETO AQUI
-                "status": "pending",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-            interaction_id = new_interaction_ref.key
-            active_interactions[chat_id] = interaction_id
-            log.info(f"Nova interação criada: {interaction_id} para chat {chat_id}")
-            _update_interaction_status(interaction_id, "pending")
 
-        _save_message_to_firebase(interaction_id, "user", wats_message)
+        _save_message_to_postgres(chat_id, "user", wats_message, user_info)
+
         # Processa com o Alfred
         Alfred_i = Alfred(app_1).Alfred
         resposta = await Alfred_i(texto_recebido)
 
         log.info(f"Resposta do Alfred: {resposta}")
 
-        _save_message_to_firebase(interaction_id, "Alfred", resposta)
+        _save_message_to_postgres(chat_id, "user", resposta, user_info)
+        
 
 
         url = f"{SERVER_URL}/message/sendText/{INSTANCE_NAME}"
@@ -110,7 +103,9 @@ async def whatsapp_webhook(request: Request):
         resp = requests.post(url, json=payload, headers=headers)
         log.info(f"Resposta enviada. Status:{resp.status_code}")
 
-        _update_interaction_status(interaction_id, "responded")
+        _update_interaction_status_postgres(chat_id, "pending")
+
+
 
 
         # **Retorna algo para o Evolution não tentar reenviar / interpretar erro**
@@ -129,6 +124,62 @@ def _get_user_info(pushNamer, participant, chat_id):
         "username": str(pushNamer),
         "platform": "WhatsApp"
     }
+def _save_message_to_postgres(chat_id, sender_type, content, user_info=None):
+    """
+    Salva uma mensagem no PostgreSQL para uma interação específica.
+    Mantendo a mesma lógica do Firebase: cada chat tem uma 'session_id'.
+    
+    Args:
+        chat_id (str): Identificador do chat (como o jid).
+        sender_type (str): 'user' ou 'Alfred'.
+        content (str): Texto da mensagem.
+        user_info (dict, opcional): Informações do usuário. Necessário se sender_type == 'user'.
+    """
+    timestamp = datetime.now(timezone.utc)
+
+    user_obj = None
+    if sender_type == "user" and user_info:
+        # Checa se o usuário já existe
+        user_obj = User.query.filter_by(platform_id=chat_id).first()
+        if not user_obj:
+            user_obj = User(
+                email=f"{user_info['username']}@whatsapp.local",  # placeholder
+                name=user_info["name"],
+                platform_id=chat_id
+            )
+            db_postgress.session.add(user_obj)
+            db_postgress.session.commit()
+
+    msg = Message(
+        session_id=chat_id,
+        user_id=user_obj.id if user_obj else None,
+        role=sender_type,
+        content=content,
+        created_at=timestamp
+    )
+    db_postgress.session.add(msg)
+    db_postgress.session.commit()
+    log.info(f"Mensagem de '{sender_type}' salva no Postgres para chat '{chat_id}'")
+
+
+def _update_interaction_status_postgres(chat_id, new_status):
+    """
+    Atualiza o status da interação no PostgreSQL.
+    Aqui, o 'status' pode ser salvo no model Message ou em outro model de controle de sessões se houver.
+    """
+    # Exemplo: podemos criar um campo meta JSON para atualizar status
+    last_msg = (
+        Message.query.filter_by(session_id=chat_id)
+        .order_by(Message.created_at.desc())
+        .first()
+    )
+    if last_msg:
+        if not last_msg.meta:
+            last_msg.meta = {}
+        last_msg.meta["status"] = new_status
+        last_msg.meta["last_activity"] = datetime.now(timezone.utc).isoformat()
+        db_postgress.session.commit()
+        log.info(f"Status da interação '{chat_id}' atualizado para '{new_status}'")
 
 def _save_message_to_firebase(interaction_id, sender_type, content):
     """
@@ -161,6 +212,26 @@ def _update_interaction_status(interaction_id, new_status):
     })
     log.info(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
 
+def set_whatsapp_status_online():
+    agent = AgentStatus.query.filter_by(platform="WhatsApp").first()
+    if not agent:
+        agent = AgentStatus(
+            platform="WhatsApp",
+            status="online",
+            last_update=datetime.now(timezone.utc),
+            image_name="whatsapp-server:latest",
+            container_name="alfred-whatsapp-agent"
+        )
+        db.session.add(agent)
+    else:
+        agent.status = "online"
+        agent.last_update = datetime.now(timezone.utc)
+        agent.image_name = "whatsapp-server:latest"
+        agent.container_name = "alfred-whatsapp-agent"
+
+    db.session.commit()
+
+set_whatsapp_status_online()
 # if __name__ == "__main__":
 #     app.run(host="0.0.0.0", port=5200, debug=True)
 
