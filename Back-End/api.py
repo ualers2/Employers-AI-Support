@@ -197,9 +197,13 @@ def chat_assistant():
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
+    user_id = request.args.get("user_id") or (request.get_json() or {}).get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id obrigatório"}), 400
+
     if request.method == 'GET':
         try:
-            configs = Config.query.all()
+            configs = Config.query.filter_by(user_id=user_id).all()
             default = {
                 "botConfig": {},
                 "moderationConfig": {},
@@ -216,17 +220,18 @@ def handle_config():
         try:
             data = request.get_json() or {}
             for key, value in data.items():
-                config = Config.query.filter_by(key=key).first()
+                config = Config.query.filter_by(user_id=user_id, key=key).first()
                 if config:
                     config.value = value
                 else:
-                    config = Config(key=key, value=value)
+                    config = Config(user_id=user_id, key=key, value=value)
                     db_postgress.session.add(config)
             db_postgress.session.commit()
             return jsonify({"message": "Configurações salvas com sucesso!"}), 200
         except Exception as e:
             logger.exception(f"Error saving configurations: {e}")
             return jsonify({"error": "Erro ao salvar configurações."}), 500
+        
         
 @app.route('/api/alfred-files/upload', methods=['POST'])
 def upload_alfred_file():
