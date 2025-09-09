@@ -19,16 +19,16 @@ const LoginForm: React.FC = () => {
   const params = new URLSearchParams(location.search);
   const videoUrl = params.get('video_url');
   console.log(`videoUrl ${videoUrl}`)
+  const LANDING_APIURL = import.meta.env.VITE_API_BASE_URL;
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const LANDING_APIURL = import.meta.env.VITE_API_BASE_URL;
     if (email && password) {
       try {
         const response = await fetch(`${LANDING_APIURL}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: email, password }),
+          body: JSON.stringify({ email: email, password }),
         });
         const result = await response.json();
         if (!response.ok) {
@@ -64,7 +64,6 @@ const LoginForm: React.FC = () => {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    const LANDING_APIURL = import.meta.env.VITE_LANDING_API;
     if (!email || !password || !confirmPassword) {
       alert('Preencha todos os campos.');
       return;
@@ -92,9 +91,9 @@ const LoginForm: React.FC = () => {
     }
   };
 
+
   return (
     <div className={`min-h-screen flex items-center justify-center ${isDarkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-gray-50 to-gray-100'} p-4 transition-colors duration-300`}>
-  
       <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
         <div className="w-full max-w-md mx-auto lg:mx-0">
           <div className="text-center mb-8">
@@ -142,7 +141,16 @@ const LoginForm: React.FC = () => {
                     <UserPlus size={20} className="mr-2" />
                     Register
                   </Button>
-            
+                  <p className="text-center text-sm mt-4">
+                    Já tem conta?{' '}
+                    <button
+                      type="button"
+                      onClick={() => setIsRegistering(false)}
+                      className="text-purple-600 hover:underline"
+                    >
+                      Fazer login
+                    </button>
+                  </p>
                 </form>
               ) : (
                 <form onSubmit={handleLogin} className="space-y-4">
@@ -164,7 +172,16 @@ const LoginForm: React.FC = () => {
                     <LogIn size={20} className="mr-2" />
                     Login
                   </Button>
-             
+                  <p className="text-center text-sm mt-4">
+                    Não tem conta?{' '}
+                    <button
+                      type="button"
+                      onClick={() => setIsRegistering(true)}
+                      className="text-green-600 hover:underline"
+                    >
+                      Criar conta
+                    </button>
+                  </p>
                 </form>
               )}
             </CardContent>

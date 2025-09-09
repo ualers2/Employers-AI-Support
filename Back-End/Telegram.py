@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from AssistantSupport.ai import Alfred
 from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Loggers.logger import setup_logger 
+from Modules.Models.postgressSQL import db as db_postgress, User, Message, Config, AlfredFile, AgentStatus
 
 
 log = setup_logger("Telegram", "Telegram.log")
@@ -26,7 +27,11 @@ app_1 = init_firebase()
 telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)
 messages_db_ref = db.reference('messages', app=app_1) 
 configurations_db_ref = db.reference('configurations', app=app_1) 
-
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'Knowledge')
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+    log.info(f"Created upload directory: {UPLOAD_FOLDER}")
 
 class Telegram:
     """
@@ -42,12 +47,7 @@ class Telegram:
         self.support_telegram_init = Bot(token=self.TelegramTOKEN)
         self.support_telegram = Application.builder().token(self.TelegramTOKEN).build()
 
-        telegram_status_ref.set({
-            "status": "online",
-            "last_update": datetime.now(timezone.utc).isoformat(),
-            "image_name": "telegram-server:latest",
-            "container_name": "alfred-telegram-agent"
-        })
+        self.set_telegram_status_online()
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('Olá! Como posso ajudar você hoje?')
@@ -59,20 +59,10 @@ class Telegram:
         user_info = self._get_user_info(telegram_message.from_user) # <-- PEGA O DICIONÁRIO DE INFORMAÇÕES
         user_text = telegram_message.text
 
-        interaction_id = self.active_interactions.get(chat_id)
 
-        if not interaction_id:
-            new_interaction_ref = messages_db_ref.push({
-                "user": user_info,  # <-- AGORA USA O DICIONÁRIO COMPLETO AQUI
-                "status": "pending",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-            interaction_id = new_interaction_ref.key
-            self.active_interactions[chat_id] = interaction_id
-            log.info(f"Nova interação criada: {interaction_id} para chat {chat_id}")
-            self._update_interaction_status(interaction_id, "pending")
+        self._update_interaction_status_postgres(chat_id, "pending")
 
-        self._save_message_to_firebase(interaction_id, "user", user_text)
+        self._save_message_to_postgres(chat_id, "user", user_text)
         Alfredclass = Alfred(app_1)
         self.Alfred = Alfredclass.Alfred
         Alfred_response = await self.Alfred(user_text)
@@ -86,9 +76,9 @@ class Telegram:
         #         print(f"Erro ao tentar deletar a mensagem: {e}")
         log.info(f"Resposta do Alfred: {Alfred_response}")
 
-        self._save_message_to_firebase(interaction_id, "Alfred", Alfred_response)
+        self._save_message_to_postgres(chat_id, "user", Alfred_response)
 
-        self._update_interaction_status(interaction_id, "responded")
+        self._update_interaction_status_postgres(chat_id, "responded")
 
         await context.bot.send_message(chat_id=update.effective_chat.id, text=Alfred_response)
 
@@ -103,20 +93,10 @@ class Telegram:
             user_info = self._get_user_info(telegram_message.from_user) # <-- PEGA O DICIONÁRIO DE INFORMAÇÕES
             user_text = telegram_message.text
 
-            interaction_id = self.active_interactions.get(chat_id)
+        
+            self._update_interaction_status_postgres(chat_id, "pending")
 
-            if not interaction_id:
-                new_interaction_ref = messages_db_ref.push({
-                    "user": user_info,  # <-- AGORA USA O DICIONÁRIO COMPLETO AQUI
-                    "status": "pending",
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
-                interaction_id = new_interaction_ref.key
-                self.active_interactions[chat_id] = interaction_id
-                log.info(f"Nova interação criada: {interaction_id} para chat {chat_id}")
-                self._update_interaction_status(interaction_id, "pending")
-
-            self._save_message_to_firebase(interaction_id, "user", user_text)
+            self._save_message_to_postgres(chat_id, "user", user_text, user_info)
             Alfredclass = Alfred(app_1)
             self.Alfred = Alfredclass.Alfred
             Alfred_response = await self.Alfred(user_text)
@@ -130,9 +110,9 @@ class Telegram:
             #         print(f"Erro ao tentar deletar a mensagem: {e}")
             log.info(f"Resposta do Alfred : {Alfred_response}")
 
-            self._save_message_to_firebase(interaction_id, "Alfred", Alfred_response)
+            self._save_message_to_postgres(chat_id, "Alfred", Alfred_response, user_info)
 
-            self._update_interaction_status(interaction_id, "responded")
+            self._update_interaction_status_postgres(chat_id, "responded")
 
             # # Deletar mensagem do usuário
             # if Deletemessage:
@@ -150,7 +130,84 @@ class Telegram:
             #         print(f"Erro ao tentar banir o usuário {user_id}: {e}")
 
             await context.bot.send_message(chat_id=chat_id, text=Alfred_response)
+   
+   
+    def _save_message_to_postgres(self, chat_id, sender_type, content, user_info=None):
+        """
+        Salva uma mensagem no PostgreSQL para uma interação específica.
+        Mantendo a mesma lógica do Firebase: cada chat tem uma 'session_id'.
+        
+        Args:
+            chat_id (str): Identificador do chat (como o chat.id do Telegram).
+            sender_type (str): 'user' ou 'Alfred'.
+            content (str): Texto da mensagem.
+            user_info (dict, opcional): Informações do usuário. Necessário se sender_type == 'user'.
+        """
+        timestamp = datetime.now(timezone.utc)
 
+        user_obj = None
+        if sender_type == "user" and user_info:
+            # Checa se o usuário já existe
+            user_obj = User.query.filter_by(platform_id=chat_id).first()
+            if not user_obj:
+                user_obj = User(
+                    email=f"{user_info['name']}@telegram.local",  # placeholder
+                    name=user_info["name"],
+                    platform_id=chat_id
+                )
+                db_postgress.session.add(user_obj)
+                db_postgress.session.commit()
+
+        msg = Message(
+            session_id=chat_id,
+            user_id=user_obj.id if user_obj else None,
+            role=sender_type,
+            content=content,
+            created_at=timestamp
+        )
+        db_postgress.session.add(msg)
+        db_postgress.session.commit()
+        log.info(f"Mensagem de '{sender_type}' salva no Postgres para chat '{chat_id}'")
+
+
+    def _update_interaction_status_postgres(self, chat_id, new_status):
+        """
+        Atualiza o status da interação no PostgreSQL.
+        Aqui, o 'status' pode ser salvo no model Message ou em outro model de controle de sessões se houver.
+        """
+        last_msg = (
+            Message.query.filter_by(session_id=chat_id)
+            .order_by(Message.created_at.desc())
+            .first()
+        )
+        if last_msg:
+            if not last_msg.meta:
+                last_msg.meta = {}
+            last_msg.meta["status"] = new_status
+            last_msg.meta["last_activity"] = datetime.now(timezone.utc).isoformat()
+            db_postgress.session.commit()
+            log.info(f"Status da interação '{chat_id}' atualizado para '{new_status}'")
+
+
+    def set_telegram_status_online(self):
+        agent = AgentStatus.query.filter_by(platform="Telegram").first()
+        if not agent:
+            agent = AgentStatus(
+                platform="Telegram",
+                status="online",
+                last_update=datetime.now(timezone.utc),
+                image_name="telegram-server:latest",
+                container_name="alfred-telegram-agent"
+            )
+            db.session.add(agent)
+        else:
+            agent.status = "online"
+            agent.last_update = datetime.now(timezone.utc)
+            agent.image_name = "telegram-server:latest"
+            agent.container_name = "alfred-telegram-agent"
+
+        db.session.commit()
+        
     def _get_user_info(self, telegram_user):
         """Extrai informações do usuário do objeto do Telegram."""
         return {
