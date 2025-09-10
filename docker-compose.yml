@@ -2,13 +2,28 @@
 version: '3.8'
 services:
 
+  meu_postgres_dev:
+    image: postgres:15
+    container_name: meu_postgres_dev
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: meubanco
+    ports:
+      - "5832:5832"
+    networks: 
+      - rede_externa
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
-  frontend:
-    image: frontend-server:latest
+
+  frontend-dev:
+    image: frontend-server-dev:latest
     build:
       context: ./Front-End
       dockerfile: Dockerfile
-    container_name: alfred_dashboard
+    container_name: alfred_dashboard_dev
     # volumes:
     #   - "./Front-End:/app"
     working_dir: /app
@@ -28,19 +43,22 @@ services:
     mem_limit: 500MB
     cpus: "1.5"
 
-  api:
-    image: api:latest
+
+  api_support-dev:
+    image: api-support-dev:latest
     privileged: true    
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - DATABASE_URL=postgresql://postgres:postgres@meu_postgres_dev:5832/meubanco
     build:
       context: ./Back-End
       dockerfile: Dockerfile
     volumes:
-      - alfred_knowledge_data:/app/alfred_knowledge
+      - alfred_knowledge_data:/app/Knowledge 
+      - logger_data:/app/Logs
       - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /app
-    container_name: api
+    container_name: api_support_dev
     restart: always
     ports:
       - "4959:4959"
@@ -48,60 +66,78 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:4959"] 
       interval: 129s
-      timeout: 2s
+      timeout: 2s 
       retries: 5
+    networks:
+      - rede_externa
     mem_limit: 500MB
     cpus: "1.5"
 
-  telegram:
-    image: telegram-server:latest
-    container_name: alfred-telegram-agent
+
+
+
+
+  telegram-dev:
+    image: telegram-server-dev:latest
+    container_name: alfred-telegram-agent-dev
+    restart: always
+    volumes:
+      - alfred_knowledge_data:/app/Knowledge
+      - logger_data:/app/Logs
     build:
       context: ./Back-End
       dockerfile: Dockerfile
-    volumes:
-      - alfred_knowledge_data:/app/alfred_knowledge
     working_dir: /app
     command: >
       sh -c "python Telegram.py"
+    networks:
+      - rede_externa
     mem_limit: 500MB
     cpus: "1.25"   
 
-  discord:
-    image: discord-server:latest
-    container_name: alfred-discord-agent
+  discord-dev:
+    image: discord-server-dev:latest
+    container_name: alfred-discord-agent-dev
+    restart: always
+    volumes:
+      - alfred_knowledge_data:/app/Knowledge
+      - logger_data:/app/Logs
     build:
       context: ./Back-End
       dockerfile: Dockerfile
-    volumes:
-      - alfred_knowledge_data:/app/alfred_knowledge
     working_dir: /app
     command: >
       sh -c "python Discord.py"
+    networks:
+      - rede_externa
     mem_limit: 500MB
     cpus: "1.25"   
 
 
-  whatsapp:
-    image: whatsapp-server:latest
-    container_name: alfred-whatsapp-agent
+  whatsapp-dev:
+    image: whatsapp-server-dev:latest
+    container_name: alfred-whatsapp-agent-dev
+    restart: always
+    volumes:
+      - alfred_knowledge_data:/app/Knowledge
+      - logger_data:/app/Logs 
+    environment:
+      - NGROK_AUTHTOKEN=2tVpX4kNbZmrr5O64bEXiD85NM9_7WSymtWCdpmGfVCwRgSXh
     build:
       context: ./Back-End
       dockerfile: Dockerfile
-    volumes:
-      - alfred_knowledge_data:/app/alfred_knowledge
     command: >
       sh -c "ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200"
-    environment:
-      - NGROK_AUTHTOKEN=2tVpX4kNbZmrr5O64bEXiD85NM9_7WSymtWCdpmGfVCwRgSXh
     ports:
       - "5200:5200"
     working_dir: /app
+    networks:
+      - rede_externa
     mem_limit: 500MB
     cpus: "1.25"   
 
-  evolution-api:
-    container_name: whatsapp-evolution-api
+  evolution-api-dev:
+    container_name: whatsapp-evolution-api-dev
     image: atendai/evolution-api:v1.8.2
     restart: always
     ports:
@@ -169,17 +205,29 @@ services:
   ngrok:
     image: ngrok/ngrok:3    # imagem oficial, garante >= v3.7.0
     depends_on:
-      - evolution-api
+      - evolution-api-dev
     environment:
       NGROK_AUTHTOKEN: 2cv4Dn37agcf3MNhri8SRgwpquI_6vQXkiKQosU8XyUfrWL7L
     entrypoint: ["ngrok"]
     command: >
-      http evolution-api:8080 --domain=accepted-poorly-maggot.ngrok-free.app
+      http evolution-api-dev:8080 --domain=accepted-poorly-maggot.ngrok-free.app
       --log=stdout
       --log-level=debug
     ports:
       - 4040:4040
 
+
+networks:
+  rede_externa:
+    external: true
+
 volumes:
+  postgres_data:
+  logger_data:
+  alfred_knowledge_data:
+  redis_data:
+  tokens:
+  videos_data:
+  files_data:
   evolution_instances:
   evolution_store:

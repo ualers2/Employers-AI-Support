@@ -19,12 +19,12 @@ from flask import request, jsonify
 from typing import Dict, Any, Optional
 from datetime import datetime
 import time
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, and_
 
 
 from ClienteChat.ai import CustomerChatAgent
 from Keys.Firebase.FirebaseApp import init_firebase
-from Modules.Models.postgressSQL import db as db_postgress, User, Message, Config, AlfredFile, AgentStatus
+from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -39,14 +39,14 @@ except docker.errors.DockerException as e:
     logger.warning(f"Não foi possível conectar ao Docker: {e}")
     client = None 
 
-app_1 = init_firebase()
-db_ref = db.reference('configurations', app=app_1) 
-users_db_ref = db.reference('users', app=app_1)
-messages_db_ref = db.reference('messages', app=app_1) 
-telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)     
-discord_status_ref = db.reference('alfred_status/Discord', app=app_1)     
-WhatsApp_status_ref = db.reference('alfred_status/WhatsApp', app=app_1)    
-alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
+# app_1 = init_firebase()
+# db_ref = db.reference('configurations', app=app_1) 
+# users_db_ref = db.reference('users', app=app_1)
+# messages_db_ref = db.reference('messages', app=app_1) 
+# telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)     
+# discord_status_ref = db.reference('alfred_status/Discord', app=app_1)     
+# WhatsApp_status_ref = db.reference('alfred_status/WhatsApp', app=app_1)    
+# alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
 
 UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -65,10 +65,10 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-db_postgress.init_app(app)
+db.init_app(app)
 
 with app.app_context():
-    db_postgress.create_all()  # cria tabelas se não existirem
+    db.create_all()  # cria tabelas se não existirem
 
 
 # Endpoint para criar login (cadastro)
@@ -88,10 +88,10 @@ def create_login():
     new_user = User(email=email)
     new_user.set_password(password)
 
-    db_postgress.session.add(new_user)
-    db_postgress.session.commit()
+    db.session.add(new_user)
+    db.session.commit()
 
-    return jsonify({"message": "Usuário criado com sucesso"}), 201
+    return jsonify({"message": "Usuário criado com sucesso", "user_id": new_user.id}), 201
 
 
 # Endpoint para login
@@ -107,7 +107,11 @@ def login():
     if not user or not user.check_password(password):
         return jsonify({"error": "Credenciais inválidas"}), 401
 
-    return jsonify({"message": f"Bem-vindo, {user.email}!"}), 200
+    # Update last_seen
+    user.last_seen = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({"message": f"Bem-vindo, {user.email}!", "user_id": user.id}), 200
 
 
 @app.route("/api/chat-assistant", methods=["POST"])
@@ -123,25 +127,26 @@ def chat_assistant():
 
         user_context = data.get("user_context", {})
         conversation_history = data.get("conversation_history", [])
-        user_id = user_context.get("user_id")  # pode ser None
-        session_id = data.get("session_id") or str(uuid.uuid4())  # garante um id
+        user_id = user_context.get("user_id")
+        session_id = data.get("session_id") or str(uuid.uuid4())
         enable_analytics = data.get("enable_analytics", True)
         model = data.get("model", "gpt-5-nano")
 
-        # --- IDENTIFICAR USUÁRIO ---
-        user = User.query.get(user_id)
+        user = resolve_user_identifier(user_id)
         if not user:
-            return jsonify({"success": False, "error": "Usuário não encontrado"}), 401
-
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+        
         # --- SALVAR MENSAGEM DO USUÁRIO ---
         user_message = Message(
             session_id=session_id,
-            user_id=user_id,
+            user_id=numeric_user_id,
             role="user",
             content=user_msg
         )
-        db_postgress.session.add(user_message)
-        db_postgress.session.commit()
+        db.session.add(user_message)
+        db.session.commit()
 
         enriched_context = _enrich_user_context(user_context, request)
 
@@ -153,7 +158,7 @@ def chat_assistant():
             conversation_history=conversation_history,
             model=model,
             UPLOAD_URL=UPLOAD_URL_VIDEOMANAGER,
-            USER_ID=str(user_id),
+            USER_ID=str(numeric_user_id),
             enable_analytics=enable_analytics
         ))
 
@@ -163,24 +168,24 @@ def chat_assistant():
             # --- SALVAR MENSAGEM DO ASSISTENTE ---
             assistant_message = Message(
                 session_id=session_id,
-                user_id=user_id,
+                user_id=numeric_user_id,
                 role="assistant",
                 content=agent_output
             )
-            db_postgress.session.add(assistant_message)
-            db_postgress.session.commit()
+            db.session.add(assistant_message)
+            db.session.commit()
 
             response_data = _format_successful_response(result, session_id)
         else:
             agent_output = f"[ERRO] {result.get('error')}"
             assistant_message = Message(
                 session_id=session_id,
-                user_id=user_id,
+                user_id=numeric_user_id,
                 role="assistant",
                 content=agent_output
             )
-            db_postgress.session.add(assistant_message)
-            db_postgress.session.commit()
+            db.session.add(assistant_message)
+            db.session.commit()
 
             response_data = _format_error_response(result, user_msg, session_id)
 
@@ -201,9 +206,16 @@ def handle_config():
     if not user_id:
         return jsonify({"error": "user_id obrigatório"}), 400
 
+    # Resolve user
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+
     if request.method == 'GET':
         try:
-            configs = Config.query.filter_by(user_id=user_id).all()
+            configs = Config.query.filter_by(user_id=numeric_user_id).all()
             default = {
                 "botConfig": {},
                 "moderationConfig": {},
@@ -220,19 +232,20 @@ def handle_config():
         try:
             data = request.get_json() or {}
             for key, value in data.items():
-                config = Config.query.filter_by(user_id=user_id, key=key).first()
+                config = Config.query.filter_by(user_id=numeric_user_id, key=key).first()
                 if config:
                     config.value = value
+                    config.updated_at = datetime.utcnow()
                 else:
-                    config = Config(user_id=user_id, key=key, value=value)
-                    db_postgress.session.add(config)
-            db_postgress.session.commit()
+                    config = Config(user_id=numeric_user_id, key=key, value=value)
+                    db.session.add(config)
+            db.session.commit()
             return jsonify({"message": "Configurações salvas com sucesso!"}), 200
         except Exception as e:
             logger.exception(f"Error saving configurations: {e}")
             return jsonify({"error": "Erro ao salvar configurações."}), 500
         
-        
+
 @app.route('/api/alfred-files/upload', methods=['POST'])
 def upload_alfred_file():
     if 'file' not in request.files:
@@ -246,11 +259,12 @@ def upload_alfred_file():
     user_id = request.form.get('user_id')
     if not user_id:
         return jsonify({"error": "user_id é obrigatório."}), 400
-    
-    user = User.query.get(user_id)
+        
+    user = resolve_user_identifier(user_id)
     if not user:
         return jsonify({"error": "Usuário não encontrado."}), 404
 
+    numeric_user_id = user.id
     channel_id = request.form.get('channelId')
     caption = request.form.get('caption')
 
@@ -274,10 +288,10 @@ def upload_alfred_file():
             local_path=file_path,
             url_download=f"/api/alfred-files/download/{unique_filename}",
             url_content=f"/api/alfred-files/{unique_filename}/content",
-            uploaded_by_user_id=user.id   # <<< vinculação ao usuário
+            uploaded_by_user_id=numeric_user_id 
         )
-        db_postgress.session.add(alfred_file)
-        db_postgress.session.commit()
+        db.session.add(alfred_file)
+        db.session.commit()
 
         return jsonify({
             "message": "Arquivo carregado com sucesso.",
@@ -285,7 +299,7 @@ def upload_alfred_file():
             "fileName": file.filename,
             "size": format_bytes(file_size_bytes),
             "lastModified": last_modified_timestamp.isoformat(),
-            "uploadedBy": user.email
+            "uploadedBy": numeric_user_id
         }), 200
 
     except Exception as e:
@@ -303,7 +317,13 @@ def list_alfred_files():
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
-        alfred_files = AlfredFile.query.filter_by(uploaded_by_user_id=user_id).all()
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
+        alfred_files = AlfredFile.query.filter_by(uploaded_by_user_id=numeric_user_id).all()
         files_list = []
 
         for af in alfred_files:
@@ -340,8 +360,14 @@ def update_alfred_file_content(fileId):
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
         # Busca o arquivo do usuário
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=numeric_user_id).first()
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
 
@@ -364,7 +390,7 @@ def update_alfred_file_content(fileId):
 
         alfred_file.size_bytes = file_stats.st_size
         alfred_file.last_modified_local = last_modified_timestamp
-        db_postgress.session.commit()
+        db.session.commit()
 
         return jsonify({
             "message": "Conteúdo atualizado com sucesso.",
@@ -386,8 +412,14 @@ def get_alfred_file_content(fileId):
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
         # Busca o arquivo do usuário
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=numeric_user_id).first()
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
 
@@ -426,7 +458,13 @@ def download_alfred_file(fileId):
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=numeric_user_id).first()
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
 
@@ -456,7 +494,13 @@ def delete_alfred_file(fileId):
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
-        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=user_id).first()
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
+        alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=numeric_user_id).first()
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
 
@@ -464,8 +508,8 @@ def delete_alfred_file(fileId):
             os.remove(alfred_file.local_path)
             logger.info(f"Arquivo '{fileId}' excluído do disco.")
 
-        db_postgress.session.delete(alfred_file)
-        db_postgress.session.commit()
+        db.session.delete(alfred_file)
+        db.session.commit()
 
         return jsonify({"message": "Arquivo excluído com sucesso."}), 200
 
@@ -482,13 +526,19 @@ def list_recent_messages():
     if not user_id:
         return jsonify({"error": "user_id é obrigatório."}), 400
 
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+
     limit = request.args.get('limit', default=10, type=int)
 
     query = db.session.query(
         Message.session_id,
         func.max(Message.created_at).label('last_timestamp'),
         func.max(Message.id).label('last_message_id')
-    ).filter_by(user_id=user_id).group_by(Message.session_id)
+    ).filter_by(user_id=numeric_user_id).group_by(Message.session_id)
 
     query = query.order_by(desc('last_timestamp')).limit(limit)
     results = query.all()
@@ -496,11 +546,11 @@ def list_recent_messages():
     interactions = []
     for row in results:
         last_message = Message.query.get(row.last_message_id)
-        user = last_message.user
+        user_obj = last_message.user
         interactions.append({
             "id": row.session_id,
-            "user": user.email if user else "Unknown User",
-            "userId": user.id if user else None,
+            "user": user_obj.email if user_obj else "Unknown User",
+            "userId": user_obj.id if user_obj else None,
             "message": last_message.content,
             "timestamp": last_message.created_at.isoformat(),
             "status": "responded"
@@ -517,11 +567,17 @@ def get_interaction_details(session_id):
     if not user_id:
         return jsonify({"error": "user_id é obrigatório."}), 400
 
-    messages = Message.query.filter_by(session_id=session_id, user_id=user_id).order_by(Message.created_at).all()
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+
+    messages = Message.query.filter_by(session_id=session_id, user_id=numeric_user_id).order_by(Message.created_at).all()
     if not messages:
         return jsonify({"error": "Interação não encontrada para este usuário."}), 404
 
-    user = messages[0].user if messages else None
+    user_obj = messages[0].user if messages else None
 
     formatted_messages = [
         {
@@ -536,8 +592,8 @@ def get_interaction_details(session_id):
     return jsonify({
         "interactionId": session_id,
         "user": {
-            "name": user.email if user else "Unknown",
-            "id": user.id if user else None,
+            "name": user_obj.email if user_obj else "Unknown",
+            "id": user_obj.id if user_obj else None,
         },
         "status": "responded",
         "messages": formatted_messages
@@ -565,31 +621,42 @@ def list_users():
         {
             "id": u.id,
             "name": u.email,
-            "status": "active"  # Se quiser, pode adicionar campo status
+            "status": u.status or "active"
         }
         for u in users
     ]), 200
 
 @app.route('/api/users/<int:user_id>/ban', methods=['POST'])
 def ban_user(user_id):
+    
     user = User.query.get(user_id)
     if not user:
         return jsonify({"error": "Usuário não encontrado."}), 404
 
-    # Aqui você precisa adicionar coluna `status` na model User
+    data = request.get_json() or {}
+    ban_reason = data.get('reason', 'Não especificado')
+    ban_duration = data.get('duration', 'Indefinido')
+
     user.status = 'banned'
+    user.ban_reason = ban_reason
+    user.ban_duration = ban_duration
     db.session.commit()
+    
     return jsonify({"message": "Usuário banido com sucesso.", "userId": user.id, "status": user.status})
 
 
 @app.route('/api/users/<int:user_id>/unban', methods=['POST'])
 def unban_user(user_id):
+
     user = User.query.get(user_id)
     if not user:
         return jsonify({"error": "Usuário não encontrado."}), 404
-
+    
     user.status = 'active'
+    user.ban_reason = None
+    user.ban_duration = None
     db.session.commit()
+    
     return jsonify({"message": "Usuário desbanido com sucesso.", "userId": user.id, "status": user.status})
 
 @app.route('/api/metrics/realtime', methods=['GET'])
@@ -599,19 +666,25 @@ def get_realtime_metrics():
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
         now = datetime.now(timezone.utc)
         one_hour_ago = now - timedelta(hours=1)
         fifteen_minutes_ago = now - timedelta(minutes=15)
 
         # 1) messages in last hour for this user
         messages_in_last_hour = Message.query.filter(
-            Message.user_id == user_id,
+            Message.user_id == numeric_user_id,
             Message.created_at >= one_hour_ago
         ).count()
 
         # 2) online users for this user context (if needed global, mantem tudo)
         online_users_count = User.query.filter(
-            User.id == user_id,
+            User.id == numeric_user_id,
             User.last_seen != None,
             User.last_seen >= fifteen_minutes_ago
         ).count()
@@ -620,7 +693,7 @@ def get_realtime_metrics():
         total_response_time = 0.0
         response_count = 0
 
-        msgs = Message.query.filter_by(user_id=user_id).order_by(Message.session_id, Message.created_at).all()
+        msgs = Message.query.filter_by(user_id=numeric_user_id).order_by(Message.session_id, Message.created_at).all()
         from collections import defaultdict
         sessions = defaultdict(list)
         for m in msgs:
@@ -654,9 +727,6 @@ def get_realtime_metrics():
     except Exception as e:
         logger.error(f"Error getting real-time metrics: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao calcular ou buscar as métricas."}), 500
-    
-
-  
 
 @app.route('/api/activities', methods=['GET'])
 def list_activities():
@@ -664,6 +734,12 @@ def list_activities():
         user_id = request.args.get("user_id")
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
+
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
 
         limit = request.args.get('limit', type=int)
         offset = request.args.get('offset', default=0, type=int)
@@ -693,7 +769,7 @@ def list_activities():
         activity_id_counter = 0
 
         # 1. Activities from messages (user only)
-        msgs = Message.query.filter_by(user_id=user_id).order_by(Message.session_id, Message.created_at).all()
+        msgs = Message.query.filter_by(user_id=numeric_user_id).order_by(Message.session_id, Message.created_at).all()
         from collections import defaultdict
         sessions = defaultdict(list)
         for m in msgs:
@@ -735,15 +811,16 @@ def list_activities():
                 all_activities.append(activity)
 
         # 2. Activities from files uploaded by this user
-        files = AlfredFile.query.filter_by(uploaded_by_user_id=user_id).order_by(AlfredFile.uploaded_at.desc()).all()
+        files = AlfredFile.query.filter_by(uploaded_by_user_id=numeric_user_id).order_by(AlfredFile.uploaded_at.desc()).all()
         for f in files:
             activity_id_counter += 1
             ts = f.uploaded_at or datetime.now(timezone.utc)
             ts = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+            user_obj = User.query.get(f.uploaded_by_user_id) if f.uploaded_by_user_id else None
             all_activities.append({
                 "id": f"file_upload_{f.id}_{activity_id_counter}",
                 "type": "file",
-                "user": f.uploaded_by_user_id and (User.query.get(f.uploaded_by_user_id).name or User.query.get(f.uploaded_by_user_id).email) or "Sistema",
+                "user": (user_obj.name or user_obj.email) if user_obj else "Sistema",
                 "action": "Arquivo Carregado",
                 "details": f"Arquivo '{f.original_filename}' ({f.unique_filename}) carregado.",
                 "timestamp": ts.isoformat(),
@@ -775,12 +852,19 @@ def list_activities():
         logger.error(f"Error listing activities: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao buscar o log de atividades."}), 500
 
-
-
-
 @app.route('/api/activities', methods=['DELETE'])
 def clear_activities():
     try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
         before_date_str = request.args.get('beforeDate')
         status_filter = request.args.get('status')
 
@@ -801,23 +885,26 @@ def clear_activities():
 
         # --- Delete message interactions whose earliest message is before before_date ---
         if before_date:
-            # Encontrar session_ids com earliest message < before_date
+            # Encontrar session_ids com earliest message < before_date para este user
             session_earliest = db.session.query(
                 Message.session_id,
                 func.min(Message.created_at).label('earliest')
-            ).group_by(Message.session_id).having(func.min(Message.created_at) < before_date).all()
+            ).filter_by(user_id=numeric_user_id).group_by(Message.session_id).having(func.min(Message.created_at) < before_date).all()
 
             session_ids_to_delete = [row.session_id for row in session_earliest]
             if session_ids_to_delete:
-                # delete messages
-                del_q = Message.__table__.delete().where(Message.session_id.in_(session_ids_to_delete))
-                res = db.session.execute(del_q)
-                deleted_count += res.rowcount if hasattr(res, 'rowcount') else 0
+                # delete messages for this user only
+                del_count = Message.query.filter(
+                    and_(Message.session_id.in_(session_ids_to_delete), Message.user_id == numeric_user_id)
+                ).delete(synchronize_session=False)
+                deleted_count += del_count
                 db.session.commit()
-                logger.info(f"Deleted {len(session_ids_to_delete)} interactions (sessions) from messages.")
+                logger.info(f"Deleted {len(session_ids_to_delete)} interactions (sessions) from messages for user {numeric_user_id}.")
 
-            # --- Delete AlfredFile metadata older than before_date ---
-            files_to_delete = AlfredFile.query.filter(AlfredFile.uploaded_at < before_date).all()
+            # --- Delete AlfredFile metadata older than before_date for this user ---
+            files_to_delete = AlfredFile.query.filter(
+                and_(AlfredFile.uploaded_at < before_date, AlfredFile.uploaded_by_user_id == numeric_user_id)
+            ).all()
             for f in files_to_delete:
                 # opcional: deletar arquivo no disco se desejar:
                 # try:
@@ -829,18 +916,12 @@ def clear_activities():
                 deleted_count += 1
             db.session.commit()
 
-        # Note: Status-based deletion not implemented com precisão porque 'status'
-        # não é um campo direto nas mensagens; precisa de model Activity ou marcação na Message.
-        # Por enquanto, beforeDate é o principal filtro.
-
-        logger.info(f"Activity log clear operation completed. deletedCount={deleted_count}")
+        logger.info(f"Activity log clear operation completed for user {numeric_user_id}. deletedCount={deleted_count}")
         return jsonify({"message": "Log de atividades limpo com sucesso.", "deletedCount": deleted_count}), 200
 
     except Exception as e:
         logger.error(f"Error clearing activities: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao limpar o log de atividades."}), 500
-
-
 
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
@@ -849,16 +930,22 @@ def get_dashboard_stats():
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
         now = datetime.now(timezone.utc)
         today_24h_ago = now - timedelta(hours=24)
         yesterday_24h_ago = today_24h_ago - timedelta(hours=24)
 
         messages_today = Message.query.filter(
-            Message.user_id == user_id,
+            Message.user_id == numeric_user_id,
             Message.created_at >= today_24h_ago
         ).all()
         messages_yesterday = Message.query.filter(
-            Message.user_id == user_id,
+            Message.user_id == numeric_user_id,
             Message.created_at >= yesterday_24h_ago,
             Message.created_at < today_24h_ago
         ).all()
@@ -869,7 +956,7 @@ def get_dashboard_stats():
         alfred_responses_today = sum(1 for m in messages_today if m.role == "assistant")
         alfred_responses_yesterday = sum(1 for m in messages_yesterday if m.role == "assistant")
 
-        files_managed = AlfredFile.query.filter_by(uploaded_by_user_id=user_id).count()
+        files_managed = AlfredFile.query.filter_by(uploaded_by_user_id=numeric_user_id).count()
 
         def calculate_percentage_change(current, previous):
             if previous == 0:
@@ -900,6 +987,12 @@ def get_alfred_status():
         if not user_id:
             return jsonify({"error": "user_id é obrigatório."}), 400
 
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        numeric_user_id = user.id
+
         details = {
             "telegramApiConnected": False,
             "DiscordApiConnected": False,
@@ -911,7 +1004,7 @@ def get_alfred_status():
         current_status = "offline"
         current_message = "Alfred está offline ou inacessível."
 
-        agents = AgentStatus.query.filter_by(user_id=user_id).all()
+        agents = AgentStatus.query.filter_by(user_id=numeric_user_id).all()
         now = datetime.now(timezone.utc)
 
         for agent in agents:
@@ -946,104 +1039,220 @@ def get_alfred_status():
 @app.route('/api/agents/initialize', methods=['POST'], strict_slashes=False)
 def initialize_agent():
     """
-    Inicializa um novo agente (Discord, Telegram ou whatsapp) buscando a image_name
-    diretamente das referências de status no Firebase.
-    Requer: platform (discord/telegram/whatsapp). agentConfigId não é mais necessário.
+    Inicializa um novo agente (Discord, Telegram ou Whatsapp) vinculado a um user_id.
+    Busca configs do usuário no Postgres e injeta no container.
     """
     data = request.get_json()
     platform = data.get('platform')
-    logger.info(data)
-    if not platform:
-        return jsonify({"message": "Platform é obrigatório."}), 400
+    user_identifier = data.get('user_id')  # aqui ainda pode ser email ou id
+
+    if not platform or not user_identifier:
+        return jsonify({"message": "Platform e user_id são obrigatórios."}), 400
 
     if platform not in ['discord', 'telegram', 'whatsapp']:
-        return jsonify({"message": "Plataforma inválida. Use 'discord' ou 'telegram'."}), 400
+        return jsonify({"message": "Plataforma inválida. Use 'discord', 'telegram' ou 'whatsapp'."}), 400
 
     try:
-        container_name = f"alfred-{platform}-agent"
-
-        success, message = _start_docker_container(container_name)
-
-        if success:
-            return jsonify({"message": message, "status": "initializing"}), 200
+       # 🔹 Se o valor não for inteiro, tratamos como email
+        if isinstance(user_identifier, int) or str(user_identifier).isdigit():
+            user_id = int(user_identifier)
+            user = User.query.get(user_id)
         else:
-            return jsonify({"message": message, "status": "failed"}), 500
+            user = User.query.filter_by(email=user_identifier).first()
+
+        if not user:
+            return jsonify({"message": f"Usuário '{user_identifier}' não encontrado."}), 404
+
+        user_id = user.id  # sempre inteiro daqui pra frente
+
+
+        container_name = f"alfred-{platform}-{user_id}-agent"
+
+        # Verifica se já existe container
+        try:
+            container = client.containers.get(container_name)
+            if container.status == 'exited':
+                container.start()
+                return jsonify({"message": f"Agente {platform}/{user_id} iniciado (já existia).", "status": "running"}), 200
+            elif container.status == 'running':
+                return jsonify({"message": f"Agente {platform}/{user_id} já está em execução.", "status": "running"}), 200
+        except docker.errors.NotFound:
+            pass
+
+        # 🔹 Buscar configs do usuário
+        bot_config = Config.query.filter_by(user_id=user_id, key="botConfig").first()
+        if not bot_config:
+            return jsonify({"message": f"Configuração botConfig não encontrada para user_id={user_id}"}), 400
+
+        bot_config_data = bot_config.value or {}
+        botToken = bot_config_data.get("botToken")
+        channelId = bot_config_data.get("channelId")
+        discordChannelId = bot_config_data.get("discordChannelId")
+        discordBotToken = bot_config_data.get("discordBotToken")
+
+        if not botToken:
+            return jsonify({"message": f"botToken não configurado para user_id={user_id}"}), 400
+
+        # 🔹 Criar container
+        image_name = f"{platform}-server-dev:latest"
+        container = client.containers.run(
+            image=image_name,
+            name=container_name,
+            detach=True,
+            restart_policy={"Name": "always"},
+            volumes={
+                "alfred_knowledge_data": {"bind": "/app/Knowledge", "mode": "rw"},
+                "logger_data": {"bind": "/app/Logs", "mode": "rw"},
+            },
+            network="rede_externa",
+            mem_limit="500m",
+            nano_cpus=int(1.25 * 1e9),
+            working_dir="/app",
+            command="sh -c 'python Telegram.py'" if platform == "telegram" else
+                    "sh -c 'python Discord.py'" if platform == "discord" else
+                    "sh -c 'ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'",
+            environment={
+                "USER_ID": str(user_id),
+                "botToken": str(botToken),
+                "channelId": str(channelId or ""),
+                "discordChannelId": str(discordChannelId or ""),
+                "discordBotToken": str(discordBotToken or "")
+            }
+        )
+
+        return jsonify({"message": f"Agente {platform}/{user_id} criado e inicializado.", "status": "initializing"}), 200
 
     except Exception as e:
-        print(f"Erro ao inicializar agente {platform}: {e}")
-        return jsonify({"message": f"Erro interno ao inicializar agente: {e}"}), 500
+        return jsonify({"message": f"Erro ao inicializar agente {platform}/{user_id}: {e}"}), 500
+    
+
+VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
+
+def _get_container_name(platform: str, user_id: str) -> str:
+    return f"alfred-{platform}-{user_id}-agent"
+
+def _get_image_and_command(platform: str):
+    if platform == "telegram":
+        return "telegram-server-dev:latest", "sh -c 'python Telegram.py'"
+    if platform == "discord":
+        return "discord-server-dev:latest", "sh -c 'python Discord.py'"
+    if platform == "whatsapp":
+        return "whatsapp-server-dev:latest", "sh -c 'ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'"
+    raise ValueError("Platform inválida")
 
 @app.route('/api/agents/<platform>/reset', methods=['POST'])
 def reset_agent(platform):
-    """
-    Reinicia o contêiner Docker de um agente específico.
-    Busca a image_name diretamente das referências de status no Firebase.
-    """
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id") or request.args.get("user_id")
 
-    container_name = f"alfred-{platform}-agent"
+    if platform not in VALID_PLATFORMS:
+        return jsonify({"message": "Plataforma inválida. Use 'discord', 'telegram' ou 'whatsapp'."}), 400
+    if not user_id:
+        return jsonify({"message": "user_id é obrigatório (no body JSON ou query param)."}), 400
 
+    container_name = _get_container_name(platform, str(user_id))
     try:
-        # Para e remove o container existente
-        stop_success, stop_message = _stop_docker_container(container_name)
-        # remove_success, remove_message = _remove_docker_container(container_name)
+        # se existir, parar e remover
+        try:
+            container = client.containers.get(container_name)
+            if container.status == "running":
+                container.stop(timeout=10)
+            container.remove(force=True)
+        except docker.errors.NotFound:
+            # se não existir, ok — iremos criar
+            pass
 
-        if not stop_success and "não encontrado" not in stop_message:
-            return jsonify({"message": f"Erro ao tentar reiniciar (parar): {stop_message}"}), 500
-  
-        # Inicia um novo container
-        start_success, start_message = _start_docker_container(container_name)
-        if start_success:
-            return jsonify({"message": f"Agente {platform} reiniciado com sucesso. {start_message}", "status": "restarting"}), 200
-        else:
-            return jsonify({"message": f"Falha ao reiniciar agente {platform}: {start_message}", "status": "failed"}), 500
+        # criar novo container
+        image_name, command = _get_image_and_command(platform)
+        container = client.containers.run(
+            image=image_name,
+            name=container_name,
+            detach=True,
+            restart_policy={"Name": "always"},
+            volumes={
+                "alfred_knowledge_data": {"bind": "/app/Knowledge", "mode": "rw"},
+                "logger_data": {"bind": "/app/Logs", "mode": "rw"},
+            },
+            network="rede_externa",
+            mem_limit="500m",
+            nano_cpus=int(1.25 * 1e9),
+            working_dir="/app",
+            command=command,
+            environment={"USER_ID": str(user_id)}
+        )
 
+        return jsonify({
+            "message": f"Agente {platform}/{user_id} reiniciado com sucesso.",
+            "container": container.name,
+            "status": "restarting"
+        }), 200
+
+    except docker.errors.APIError as e:
+        return jsonify({"message": f"Erro na API Docker ao reiniciar {container_name}: {str(e)}"}), 500
     except Exception as e:
-        print(f"Erro ao reiniciar agente {platform}: {e}")
-        return jsonify({"message": f"Erro interno ao reiniciar agente: {e}"}), 500
+        return jsonify({"message": f"Erro interno ao reiniciar agente: {str(e)}"}), 500
+
 
 @app.route('/api/agents/<platform>/pause', methods=['POST'])
 def pause_agent(platform):
-    """
-    Pausa ou despausa o contêiner Docker de um agente específico.
-    """
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id") or request.args.get("user_id")
 
-    container_name = f"alfred-{platform}-agent"
+    if platform not in VALID_PLATFORMS:
+        return jsonify({"message": "Plataforma inválida. Use 'discord', 'telegram' ou 'whatsapp'."}), 400
+    if not user_id:
+        return jsonify({"message": "user_id é obrigatório (no body JSON ou query param)."}), 400
+
+    container_name = _get_container_name(platform, str(user_id))
 
     try:
-        if not client:
-            raise Exception("Docker client não está disponível.")
         container = client.containers.get(container_name)
+        # status pode ser 'running', 'paused', 'exited', ...
         if container.status == 'paused':
             container.unpause()
-            return jsonify({"message": f"Agente {platform} despausado com sucesso.", "status": "running"}), 200
+            return jsonify({"message": f"Agente {platform}/{user_id} despausado.", "status": "running"}), 200
         else:
             container.pause()
-            return jsonify({"message": f"Agente {platform} pausado com sucesso.", "status": "paused"}), 200
+            return jsonify({"message": f"Agente {platform}/{user_id} pausado.", "status": "paused"}), 200
+
     except docker.errors.NotFound:
         return jsonify({"message": f"Container '{container_name}' não encontrado para pausar/despausar."}), 404
     except docker.errors.APIError as e:
-        return jsonify({"message": f"Erro na API Docker ao pausar/despausar {container_name}: {e}"}), 500
+        return jsonify({"message": f"Erro na API Docker ao pausar/despausar {container_name}: {str(e)}"}), 500
     except Exception as e:
-        print(f"Erro ao pausar/despausar agente {platform}: {e}")
-        return jsonify({"message": f"Erro interno ao pausar/despausar agente: {e}"}), 500
+        return jsonify({"message": f"Erro interno ao pausar/despausar agente: {str(e)}"}), 500
+
 
 @app.route('/api/agents/<platform>/delete', methods=['DELETE'])
 def delete_agent(platform):
-    """
-    Deleta o contêiner Docker de um agente específico.
-    """
-    container_name = f"alfred-{platform}-agent"
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id") or request.args.get("user_id")
 
-    success, message = _remove_docker_container(container_name)
+    if platform not in VALID_PLATFORMS:
+        return jsonify({"message": "Plataforma inválida. Use 'discord', 'telegram' ou 'whatsapp'."}), 400
+    if not user_id:
+        return jsonify({"message": "user_id é obrigatório (no body JSON ou query param)."}), 400
 
-    if success:
-        return jsonify({"message": message, "status": "deleted"}), 200
-    else:
-        # Se não for encontrado, ainda é um "sucesso" em termos de que não está mais lá
-        if "não encontrado" in message:
-            return jsonify({"message": f"Container '{container_name}' já não existe ou não foi encontrado. {message}", "status": "not_found"}), 200
-        return jsonify({"message": message, "status": "failed"}), 500
+    container_name = _get_container_name(platform, str(user_id))
 
+    try:
+        try:
+            container = client.containers.get(container_name)
+            # stop + remove
+            if container.status == "running":
+                container.stop(timeout=10)
+            container.remove(force=True)
+            return jsonify({"message": f"Container '{container_name}' removido.", "status": "deleted"}), 200
+
+        except docker.errors.NotFound:
+            # Consideramos já deletado / não existente um resultado "ok"
+            return jsonify({"message": f"Container '{container_name}' não encontrado (já removido).", "status": "not_found"}), 200
+
+    except docker.errors.APIError as e:
+        return jsonify({"message": f"Erro na API Docker ao remover {container_name}: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"message": f"Erro interno ao deletar agente: {str(e)}"}), 500
+    
 @app.route('/callback')
 def oauth_callback():
     # 1) Pega o código que o provedor OAuth enviou
@@ -1071,6 +1280,34 @@ def trocar_code_por_token(code):
     }
     resp = requests.post('https://discord.com/api/oauth2/token', data=data)
     return resp.json()
+
+
+
+def resolve_user_identifier(identifier):
+    """
+    Aceita:
+     - None -> retorna None
+     - número (string ou int) -> busca por id
+     - string com @ -> busca por email
+     - string sem @ -> tenta converter para int, senão retorna None
+    Retorna User instance ou None.
+    """
+    if not identifier:
+        return None
+
+    # Se já for int
+    try:
+        uid = int(identifier)
+        return User.query.get(uid)
+    except (ValueError, TypeError):
+        pass
+
+    # se parecer email
+    if isinstance(identifier, str) and "@" in identifier:
+        return User.query.filter_by(email=identifier).first()
+
+    # fallback: tenta buscar por email ignorando espaços
+    return User.query.filter_by(email=str(identifier).strip()).first()
 
 def _enrich_user_context(user_context: Dict[str, Any], request_obj) -> Dict[str, Any]:
     """Enriquece o contexto do usuário com informações da requisição"""
@@ -1178,18 +1415,6 @@ def _format_error_response(result: Dict[str, Any], user_msg: str, session_id: Op
     
     return response_data
 
-def save_message_to_firebase(session_id, role, content):
-    """
-    Salva uma mensagem no Firebase Realtime Database.
-    Estrutura: /conversations/<session_id>/messages
-    """
-    ref = db.reference(f"conversations/{session_id}/messages", app=app_1)
-    new_msg = {
-        "role": role,            # "user" ou "assistant"
-        "content": content,
-        "timestamp": int(time.time())
-    }
-    ref.push(new_msg)
 
 def _start_docker_container(container_name: str):
     """
@@ -1267,89 +1492,6 @@ def get_file_type(filename):
         return "data"
     else:
         return "other"
-
-def get_configurations():
-    try:
-        raw = db_ref.get() or {}
-        default = {
-            "botConfig": {
-                "botToken": "",
-                "channelId": "",
-                "discordBotToken": "",
-                "discordChannelId": "",
-                "waServerUrl": '',
-                "waInstanceId": '',
-                "waApiKey": '',
-                "waSupportGroupJid": '',
-            },
-            "moderationConfig": {
-                "autoModeration": False,
-                "aiModeration": False,
-                "aiModerationModel": "ominilatest",
-                "deleteSpam": False,
-                "banThreshold": 3,
-            },
-            "alfredConfig": {
-                "alfredName": "Alfred",
-                "alfredModel": "gpt-4.1-nano",
-                "alfredInstructions": (
-                    "## Objetivo\n"
-                    "Oferecer suporte completo aos usuários do **Media Cuts Studio**, "
-                    "garantindo a resolução rápida de problemas, registro organizado de tickets, "
-                    "e coleta de feedback para melhoria contínua."
-                ),
-                "toolsEnabled": False,
-            }
-        }
-
-        # Overlay de botConfig
-        bc = default["botConfig"]
-        bc["botToken"] = raw.get("botToken", bc["botToken"])
-        bc["channelId"] = raw.get("channelId", bc["channelId"])
-        bc["discordBotToken"] = raw.get("discordBotToken", bc["discordBotToken"])
-        bc["discordChannelId"] = raw.get("discordChannelId", bc["discordChannelId"])
-        bc["waServerUrl"] = raw.get("waServerUrl", bc["waServerUrl"])
-        bc["waInstanceId"] = raw.get("waInstanceId", bc["waInstanceId"])
-        bc["waApiKey"] = raw.get("waApiKey", bc["waApiKey"])
-        bc["waSupportGroupJid"] = raw.get("waSupportGroupJid", bc["waSupportGroupJid"])
-
-        # Overlay de moderationConfig
-        mc = default["moderationConfig"]
-        mc["autoModeration"] = raw.get("autoModeration", mc["autoModeration"])
-        mc["aiModeration"]    = raw.get("aiModeration", mc["aiModeration"])
-        mc["aiModerationModel"] = raw.get("aiModerationModel", mc["aiModerationModel"])
-        mc["deleteSpam"]      = raw.get("deleteSpam", mc["deleteSpam"])
-        mc["banThreshold"]    = raw.get("banThreshold", mc["banThreshold"])
-
-        # Overlay de alfredConfig
-        ac = default["alfredConfig"]
-        ac["alfredName"]         = raw.get("alfredName", ac["alfredName"])
-        ac["alfredModel"]        = raw.get("alfredModel", ac["alfredModel"])
-        ac["alfredInstructions"] = raw.get("alfredInstructions", ac["alfredInstructions"])
-        ac["toolsEnabled"]       = raw.get("toolsEnabled", ac["toolsEnabled"])
-
-        result = {
-            "botConfig": bc,
-            "moderationConfig": mc,
-            "alfredConfig": ac
-        }
-        logger.info("GET /api/config -> %s", result)
-        return jsonify(result), 200
-
-    except Exception as e:
-        logger.exception("Erro em get_configurations")
-        return jsonify({"error": "Erro interno ao buscar configurações"}), 500
-
-def save_configurations():
-    try:
-        data = request.get_json() or {}
-        db_ref.set(data)
-        logger.info(f"Configurations saved: {data}")
-        return jsonify({"message": "Configurações salvas com sucesso!"}), 200
-
-    except Exception as e:
-        logger.error(f"Error saving configurations: {e}")
-        return jsonify({"error": "Erro ao salvar configurações."}), 500
 
 # Roda o app quando executado diretamente
 if __name__ == '__main__':
