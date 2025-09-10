@@ -103,7 +103,7 @@ export interface AlfredFile {
 const getUserIdFromLocalStorage = (): string | null => {
     return localStorage.getItem('user_email');
 };
-
+const userId = localStorage.getItem('user_email') || '';
 // --- New API Function for Recent Messages ---
 export const fetchRecentMessages = async (): Promise<RecentMessage[]> => {
     try {
@@ -125,7 +125,6 @@ export const uploadAlfredFile = async (file: File, caption: string = '', channel
         if (caption) formData.append('caption', caption);
         if (channelId) formData.append('channelId', channelId);
 
-        const userId = localStorage.getItem('user_email') || '';
         formData.append('user_id', userId);
 
         const response = await fetch(`${API_BASE_URL}/alfred-files/upload`, { // Updated endpoint
@@ -146,7 +145,6 @@ export const uploadAlfredFile = async (file: File, caption: string = '', channel
 
 export const fetchAlfredFiles = async (): Promise<AlfredFile[]> => {
     try {
-        const userId = localStorage.getItem('user_email') || '';
         const response = await fetch(`${API_BASE_URL}/alfred-files?user_id=${encodeURIComponent(userId)}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -161,7 +159,6 @@ export const fetchAlfredFiles = async (): Promise<AlfredFile[]> => {
 
 export const fetchAlfredFileContent = async (fileId: string): Promise<{ id: string; name: string; content: string; lastModified: string }> => {
     try {
-        const userId = localStorage.getItem('user_email') || '';
         const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}/content?user_id=${encodeURIComponent(userId)}`);
         if (!response.ok) {
             const errorData = await response.json();
@@ -176,7 +173,6 @@ export const fetchAlfredFileContent = async (fileId: string): Promise<{ id: stri
 
 export const updateAlfredFileContent = async (fileId: string, content: string): Promise<{ message: string; fileId: string; lastModified: string }> => {
     try {
-        const userId = localStorage.getItem('user_email') || '';
         const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}/content?user_id=${encodeURIComponent(userId)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -196,7 +192,6 @@ export const updateAlfredFileContent = async (fileId: string, content: string): 
 
 export const deleteAlfredFile = async (fileId: string): Promise<{ message: string }> => {
     try {
-        const userId = localStorage.getItem('user_email') || '';
         const response = await fetch(`${API_BASE_URL}/alfred-files/${fileId}?user_id=${encodeURIComponent(userId)}`, {
             method: 'DELETE',
         });
@@ -213,7 +208,6 @@ export const deleteAlfredFile = async (fileId: string): Promise<{ message: strin
 
 
 export const fetchBotConfiguration = async (): Promise<FullBotConfiguration> => {
-    const userId = localStorage.getItem('user_email') || '';
     const response = await fetch(`${API_BASE_URL}/config?user_id=${encodeURIComponent(userId)}`);
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
@@ -247,46 +241,56 @@ export const fetchBotConfiguration = async (): Promise<FullBotConfiguration> => 
 };
 
 export const updateBotConfiguration = async (config: FullBotConfiguration): Promise<FullBotConfiguration> => {
-    // Flatten into backend expected keys
     const payload: any = {
-        botToken: config.botConfig.telegramBotToken,
-        channelId: config.botConfig.telegramChannelId,
-        waServerUrl:       config.botConfig.waServerUrl,      
-        waInstanceId:      config.botConfig.waInstanceId,
-        waApiKey:          config.botConfig.waApiKey,
-        waSupportGroupJid: config.botConfig.waSupportGroupJid,
-        autoModeration: config.moderationConfig.autoModeration,
-        aiModeration: config.moderationConfig.aiModeration,
-        aiModerationModel: config.moderationConfig.aiModerationModel,
-        deleteSpam: config.moderationConfig.deleteSpam,
-        banThreshold: config.moderationConfig.banThreshold,
-        alfredName: config.alfredConfig.alfredName,
-        alfredModel: config.alfredConfig.alfredModel,
-        alfredInstructions: config.alfredConfig.alfredInstructions,
-        toolsEnabled: config.alfredConfig.toolsEnabled,
-        user_id: localStorage.getItem('user_email') || ''
+        botConfig: {
+            botToken: config.botConfig.telegramBotToken,
+            channelId: config.botConfig.telegramChannelId,
+            waServerUrl:       config.botConfig.waServerUrl,      
+            waInstanceId:      config.botConfig.waInstanceId,
+            waApiKey:          config.botConfig.waApiKey,
+            waSupportGroupJid: config.botConfig.waSupportGroupJid,
+        },
+        moderationConfig: {
+            autoModeration: config.moderationConfig.autoModeration,
+            aiModeration: config.moderationConfig.aiModeration,
+            aiModerationModel: config.moderationConfig.aiModerationModel,
+            deleteSpam: config.moderationConfig.deleteSpam,
+            banThreshold: config.moderationConfig.banThreshold,
+        },
+        alfredConfig: {
+            alfredName: config.alfredConfig.alfredName,
+            alfredModel: config.alfredConfig.alfredModel,
+            alfredInstructions: config.alfredConfig.alfredInstructions,
+            toolsEnabled: config.alfredConfig.toolsEnabled,
+        },
+        user_id: userId
     };
-    // Include Discord keys if provided
-    if (config.botConfig.discordBotToken) payload.discordBotToken = config.botConfig.discordBotToken;
-    if (config.botConfig.discordChannelId) payload.discordChannelId = config.botConfig.discordChannelId;
 
+    // Inclui Discord apenas se existir
+    if (config.botConfig.discordBotToken) {
+        payload.botConfig.discordBotToken = config.botConfig.discordBotToken;
+    }
+    if (config.botConfig.discordChannelId) {
+        payload.botConfig.discordChannelId = config.botConfig.discordChannelId;
+    }
 
     const response = await fetch(`${API_BASE_URL}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
+
     if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
-    // Refetch to sync
+
+    // Refetch para manter sincronizado
     return await fetchBotConfiguration();
 };
 
 
 export const fetchRealtimeMetrics = async (): Promise<RealtimeMetrics> => {
-    const userId = localStorage.getItem('user_email') || '';
     const response = await fetch(`${API_BASE_URL}/metrics/realtime?user_id=${encodeURIComponent(userId)}`);
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return await response.json();
@@ -298,7 +302,6 @@ export const fetchActivityLog = async (
     filters?: { type?: string; status?: string; startDate?: string; endDate?: string; searchTerm?: string; }
 ): Promise<ActivityLogResponse> => {
     const params = new URLSearchParams();
-    const userId = localStorage.getItem('user_email') || '';
     params.append('limit', limit.toString());
     params.append('offset', offset.toString());
     params.append('user_id', userId);

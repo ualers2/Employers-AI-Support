@@ -32,7 +32,11 @@ const AlfredControlPanel: React.FC<AlfredControlPanelProps> = ({ API_BASE_URL })
     ) => {
         const url = `${API_BASE_URL}/agents/${action === 'initialize' ? 'initialize' : platform}/${action === 'initialize' ? '' : action}`;
         const method = action === 'delete' ? 'DELETE' : 'POST';
-        const body = (action === 'initialize' || action === 'reset') ? JSON.stringify({ platform, agentConfigId: configId }) : undefined;
+        const userId = localStorage.getItem('user_email') || '';
+
+        const body = (action === 'initialize' || action === 'reset')
+            ? JSON.stringify({ platform, agentConfigId: configId, user_id: userId }) // 🔹 Inclui user_id
+            : JSON.stringify({ platform, user_id: userId });
 
         // Lógica para definir qual estado de carregamento atualizar
         let setLoading: React.Dispatch<React.SetStateAction<boolean>>;

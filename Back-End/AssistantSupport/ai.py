@@ -6,7 +6,8 @@ import os
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from pydantic import BaseModel
 import logging
-from firebase_admin import db
+# from firebase_admin import db
+from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 
 
 logging.basicConfig(level=logging.INFO)
@@ -27,16 +28,15 @@ class Alfred:
             logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
        
         self.app_1 = app_1
-        self.alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
-        self.alfred_ref = db.reference('configurations', app=app_1)
-        data = self.alfred_ref.get()
-        
-        self.nameAlfred = data.get("alfredName", "Alfred")
-        self.model_selectAlfred = data.get("alfredModel", "gpt-4.1-nano")
+        # self.alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
+     
+        self.nameAlfred = "Alfred"
+        self.model_selectAlfred = "gpt-5-nano"
         self.adxitional_instructions_Alfred = ""
         self.system_ = "siga com os objetivos da instrucao"
-
-        self.instruction_db = data.get("alfredInstructions", "")
+        self.instruction_db = """
+        ## Objetivo        Oferecer suporte completo aos usuários do **Media Cuts Studio**, garantindo a resolução rápida de problemas, registro organizado de tickets, e coleta de feedback para melhoria contínua.
+        """
         self.logger.info(self.nameAlfred)
         self.logger.info(self.model_selectAlfred)
         self.logger.info(self.instruction_db)
@@ -45,49 +45,84 @@ class Alfred:
 
                 
 
-    def get_alfred_local_file_paths(self):
+    # def get_alfred_local_file_paths(self):
+    #     """
+    #     Percorre todos os nós da referência 'alfred_knowledge_metadata' no Firebase,
+    #     obtém o 'local_path' de cada arquivo e retorna uma lista desses caminhos.
+    #     Ignora entradas sem 'local_path' ou onde o arquivo não existe mais localmente.
+    #     """
+    #     try:
+    #         # Pega todos os metadados da referência alfred_knowledge_metadata
+    #         all_metadata = self.alfred_files_metadata_ref.get()
+
+    #         if not all_metadata:
+    #             self.logger.info("Nenhum metadado de arquivo encontrado no Firebase para Alfred.")
+    #             return []
+
+    #         local_paths = []
+    #         for file_id, metadata in all_metadata.items():
+    #             if not isinstance(metadata, dict):
+    #                 self.logger.warning(f"Metadado malformado para '{file_id}' no Firebase. Ignorando.")
+    #                 continue
+
+    #             local_path = metadata.get("local_path")
+
+    #             if local_path:
+    #                 # Opcional: Verifique se o arquivo realmente existe no disco
+    #                 if os.path.exists(local_path):
+    #                     local_paths.append(local_path)
+    #                 else:
+    #                     self.logger.warning(f"Arquivo local não encontrado para '{file_id}' no caminho: '{local_path}'. A entrada do Firebase pode estar desatualizada.")
+    #                     # Opcional: Você pode querer remover essa entrada do Firebase se o arquivo não existe mais
+    #                     # alfred_files_metadata_ref.child(file_id).delete()
+    #             else:
+    #                 self.logger.warning(f"Entrada de metadado para '{file_id}' no Firebase não possui 'local_path'. Ignorando.")
+
+    #         self.logger.info(f"Retornados {len(local_paths)} caminhos de arquivos locais para Alfred.")
+    #         return local_paths
+
+    #     except Exception as e:
+    #         self.logger.error(f"Erro ao obter caminhos de arquivos locais para Alfred: {e}", exc_info=True)
+    #         return []
+        
+    def get_user_file_paths(self, user_identifier):
         """
-        Percorre todos os nós da referência 'alfred_knowledge_metadata' no Firebase,
-        obtém o 'local_path' de cada arquivo e retorna uma lista desses caminhos.
-        Ignora entradas sem 'local_path' ou onde o arquivo não existe mais localmente.
+        Retorna apenas os arquivos do usuário (não todos do banco).
+        O user_identifier pode ser id (int) ou email (str).
         """
         try:
-            # Pega todos os metadados da referência alfred_knowledge_metadata
-            all_metadata = self.alfred_files_metadata_ref.get()
+            # 🔹 Resolver user_identifier (email ou id) para sempre virar user_id
+            if isinstance(user_identifier, int) or str(user_identifier).isdigit():
+                user = User.query.get(int(user_identifier))
+            else:
+                user = User.query.filter_by(email=user_identifier).first()
 
-            if not all_metadata:
-                self.logger.info("Nenhum metadado de arquivo encontrado no Firebase para Alfred.")
+            if not user:
+                self.logger.info(f"Usuário '{user_identifier}' não encontrado.")
+                return []
+
+            # Buscar arquivos pelo uploaded_by_user_id
+            files = AlfredFile.query.filter_by(uploaded_by_user_id=user.id).all()
+            if not files:
+                self.logger.info(f"Nenhum arquivo encontrado para usuário {user.id} ({user.email})")
                 return []
 
             local_paths = []
-            for file_id, metadata in all_metadata.items():
-                if not isinstance(metadata, dict):
-                    self.logger.warning(f"Metadado malformado para '{file_id}' no Firebase. Ignorando.")
-                    continue
-
-                local_path = metadata.get("local_path")
-
-                if local_path:
-                    # Opcional: Verifique se o arquivo realmente existe no disco
-                    if os.path.exists(local_path):
-                        local_paths.append(local_path)
-                    else:
-                        self.logger.warning(f"Arquivo local não encontrado para '{file_id}' no caminho: '{local_path}'. A entrada do Firebase pode estar desatualizada.")
-                        # Opcional: Você pode querer remover essa entrada do Firebase se o arquivo não existe mais
-                        # alfred_files_metadata_ref.child(file_id).delete()
+            for f in files:
+                if f.local_path and os.path.exists(f.local_path):
+                    local_paths.append(f.local_path)
                 else:
-                    self.logger.warning(f"Entrada de metadado para '{file_id}' no Firebase não possui 'local_path'. Ignorando.")
+                    self.logger.warning(f"Arquivo não encontrado no disco: {f.local_path}")
 
-            self.logger.info(f"Retornados {len(local_paths)} caminhos de arquivos locais para Alfred.")
+            self.logger.info(f"Retornados {len(local_paths)} arquivos para o usuário {user.id} ({user.email})")
             return local_paths
 
         except Exception as e:
-            self.logger.error(f"Erro ao obter caminhos de arquivos locais para Alfred: {e}", exc_info=True)
+            self.logger.error(f"Erro ao buscar arquivos do usuário {user_identifier}: {e}", exc_info=True)
             return []
-
-    async def Alfred(self, mensagem):
-
-        all_paths = self.get_alfred_local_file_paths()
+        
+    async def Alfred(self, mensagem, user_platform_id):
+        all_paths = self.get_user_file_paths(user_platform_id)
         all_content = ""
         for path in all_paths:
             file_extension = path.rsplit('.', 1)[1].lower() if '.' in path else ''

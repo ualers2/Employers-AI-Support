@@ -16,6 +16,7 @@ import {
     deleteAlfredFile,
     AlfredFile // Import the updated interface
 } from '@/lib/api';
+const userId = localStorage.getItem('user_email') || '';
 
 const FileManager = () => {
     const [caption, setCaption] = useState('');
@@ -69,7 +70,7 @@ const FileManager = () => {
                 type: response.fileName.split('.').pop() || 'document', // Infer type from extension
                 size: response.size,
                 lastModified: response.lastModified,
-                url: `${API_BASE_URL}/alfred-files/${response.fileId}/download`, // Construct download URL
+                url: `${API_BASE_URL}/alfred-files/${response.fileId}/download?user_id=${encodeURIComponent(userId)}`, // Construct download URL
                 isEditing: false
             };
 
@@ -170,7 +171,7 @@ const FileManager = () => {
 
     const handleDownloadFile = (fileId: string) => {
         // Construct the download URL based on the new endpoint structure
-        window.open(`${API_BASE_URL}/alfred-files/${fileId}/download`, '_blank');
+        window.open(`${API_BASE_URL}/alfred-files/${fileId}/download?user_id=${encodeURIComponent(userId)}`, '_blank');
         toast({
             title: "Download iniciado!",
             description: "O download do arquivo foi iniciado.",

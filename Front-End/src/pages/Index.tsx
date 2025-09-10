@@ -35,11 +35,11 @@ const Index = () => {
     const [alfredStatusMessage, setAlfredStatusMessage] = useState("Conectando...");
     const { toast } = useToast();
     const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
-
+    const userId = localStorage.getItem('user_email') || '';
     // Função para buscar as estatísticas do dashboard
     const fetchDashboardStats = useCallback(async () => {
         try {
-            const response = await fetch(`${API_BASE_URL}/dashboard/stats`);
+            const response = await fetch(`${API_BASE_URL}/dashboard/stats?user_id=${encodeURIComponent(userId)}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
@@ -58,7 +58,7 @@ const Index = () => {
     // Função para verificar o status do Alfred
     const checkAlfredStatus = useCallback(async () => {
         try {
-            const response = await fetch(`${API_BASE_URL}/alfred/status`);
+            const response = await fetch(`${API_BASE_URL}/alfred/status?user_id=${encodeURIComponent(userId)}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }

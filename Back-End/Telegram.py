@@ -11,22 +11,22 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),  'Keys', 'keys.env'))
 os.chdir(os.path.join(os.path.dirname(__file__)))
 import firebase_admin
-from firebase_admin import db
+# from firebase_admin import db
 from datetime import datetime, timedelta, timezone
 
 
 from AssistantSupport.ai import Alfred
 from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Loggers.logger import setup_logger 
-from Modules.Models.postgressSQL import db as db_postgress, User, Message, Config, AlfredFile, AgentStatus
+from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 
 
 log = setup_logger("Telegram", "Telegram.log")
 
-app_1 = init_firebase()
-telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)
-messages_db_ref = db.reference('messages', app=app_1) 
-configurations_db_ref = db.reference('configurations', app=app_1) 
+# app_1 = init_firebase()
+# telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)
+# messages_db_ref = db.reference('messages', app=app_1) 
+# configurations_db_ref = db.reference('configurations', app=app_1) 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'Knowledge')
 if not os.path.exists(UPLOAD_FOLDER):
@@ -40,14 +40,15 @@ class Telegram:
 
     - os agentes softwareai podem dar suporte a perguntas de usuarios e enviar imagens ao canal
     """
-    def __init__(self, TOKEN, CHANNEL_ID):
+    def __init__(self, TOKEN, CHANNEL_ID, user_platform_id):
         self.TelegramTOKEN = TOKEN
         self.CHANNEL_ID = CHANNEL_ID
         self.active_interactions = {}
         self.support_telegram_init = Bot(token=self.TelegramTOKEN)
         self.support_telegram = Application.builder().token(self.TelegramTOKEN).build()
-
-        self.set_telegram_status_online()
+        self.user_platform_id = user_platform_id
+        # with app.app_context():
+        #     self.set_telegram_status_online()
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('Olá! Como posso ajudar você hoje?')
@@ -63,9 +64,9 @@ class Telegram:
         self._update_interaction_status_postgres(chat_id, "pending")
 
         self._save_message_to_postgres(chat_id, "user", user_text)
-        Alfredclass = Alfred(app_1)
+        Alfredclass = Alfred()
         self.Alfred = Alfredclass.Alfred
-        Alfred_response = await self.Alfred(user_text)
+        Alfred_response = await self.Alfred(user_text, self.user_platform_id)
 
         # if Deletemessage:
         #     try:
@@ -97,9 +98,9 @@ class Telegram:
             self._update_interaction_status_postgres(chat_id, "pending")
 
             self._save_message_to_postgres(chat_id, "user", user_text, user_info)
-            Alfredclass = Alfred(app_1)
+            Alfredclass = Alfred()
             self.Alfred = Alfredclass.Alfred
-            Alfred_response = await self.Alfred(user_text)
+            Alfred_response = await self.Alfred(user_text, self.user_platform_id)
 
             # if Deletemessage:
             #     try:
@@ -155,8 +156,8 @@ class Telegram:
                     name=user_info["name"],
                     platform_id=chat_id
                 )
-                db_postgress.session.add(user_obj)
-                db_postgress.session.commit()
+                db.session.add(user_obj)
+                db.session.commit()
 
         msg = Message(
             session_id=chat_id,
@@ -165,8 +166,8 @@ class Telegram:
             content=content,
             created_at=timestamp
         )
-        db_postgress.session.add(msg)
-        db_postgress.session.commit()
+        db.session.add(msg)
+        db.session.commit()
         log.info(f"Mensagem de '{sender_type}' salva no Postgres para chat '{chat_id}'")
 
 
@@ -185,7 +186,7 @@ class Telegram:
                 last_msg.meta = {}
             last_msg.meta["status"] = new_status
             last_msg.meta["last_activity"] = datetime.now(timezone.utc).isoformat()
-            db_postgress.session.commit()
+            db.session.commit()
             log.info(f"Status da interação '{chat_id}' atualizado para '{new_status}'")
 
 
@@ -217,36 +218,36 @@ class Telegram:
             "platform": "Telegram"
         }
 
-    def _save_message_to_firebase(self, interaction_id, sender_type, content):
-        """
-        Salva uma mensagem no Firebase para uma interação específica.
-        Args:
-            interaction_id (str): O ID da interação (conversation).
-            sender_type (str): 'user' ou 'Alfred'.
-            content (str): O texto da mensagem.
-        """
-        timestamp = datetime.now(timezone.utc).isoformat()
-        message_data = {
-            "sender": sender_type,
-            "content": content,
-            "timestamp": timestamp
-        }
-        # Usa push() para criar um ID único para cada mensagem dentro da interação
-        messages_db_ref.child(interaction_id).child('messages').push(message_data)
-        log.info(f"Mensagem de '{sender_type}' salva na interação '{interaction_id}'")
+    # def _save_message_to_firebase(self, interaction_id, sender_type, content):
+    #     """
+    #     Salva uma mensagem no Firebase para uma interação específica.
+    #     Args:
+    #         interaction_id (str): O ID da interação (conversation).
+    #         sender_type (str): 'user' ou 'Alfred'.
+    #         content (str): O texto da mensagem.
+    #     """
+    #     timestamp = datetime.now(timezone.utc).isoformat()
+    #     message_data = {
+    #         "sender": sender_type,
+    #         "content": content,
+    #         "timestamp": timestamp
+    #     }
+    #     # Usa push() para criar um ID único para cada mensagem dentro da interação
+    #     messages_db_ref.child(interaction_id).child('messages').push(message_data)
+    #     log.info(f"Mensagem de '{sender_type}' salva na interação '{interaction_id}'")
 
-    def _update_interaction_status(self, interaction_id, new_status):
-        """
-        Atualiza o status de uma interação.
-        Args:
-            interaction_id (str): O ID da interação.
-            new_status (str): Novo status ('pending', 'responded', 'resolved').
-        """
-        messages_db_ref.child(interaction_id).update({
-            "status": new_status,
-            "last_activity": datetime.now(timezone.utc).isoformat() # Opcional: para saber a última vez que a interação foi atualizada
-        })
-        log.info(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
+    # def _update_interaction_status(self, interaction_id, new_status):
+    #     """
+    #     Atualiza o status de uma interação.
+    #     Args:
+    #         interaction_id (str): O ID da interação.
+    #         new_status (str): Novo status ('pending', 'responded', 'resolved').
+    #     """
+    #     messages_db_ref.child(interaction_id).update({
+    #         "status": new_status,
+    #         "last_activity": datetime.now(timezone.utc).isoformat() # Opcional: para saber a última vez que a interação foi atualizada
+    #     })
+    #     log.info(f"Status da interação '{interaction_id}' atualizado para '{new_status}'")
 
 
     async def send_image_to_channel(self, image_path, caption=None):
@@ -277,8 +278,9 @@ class Telegram:
 
 
 if __name__ == '__main__':
-    data = configurations_db_ref.get()
-    TOKEN = data.get("botToken") 
-    CHANNEL_ID =  data.get("channelId") 
-    Telegram_instance = Telegram(TOKEN, CHANNEL_ID)
+    # data = configurations_db_ref.get()
+    user_platform_id = os.getenv("USER_ID") 
+    TOKEN = os.getenv("botToken") 
+    CHANNEL_ID =  os.getenv("channelId") 
+    Telegram_instance = Telegram(TOKEN, CHANNEL_ID, user_platform_id)
     Telegram_instance.main_telegram()
