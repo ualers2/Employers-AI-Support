@@ -16,9 +16,7 @@ const LoginForm: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
   const location = useLocation();
-  const params = new URLSearchParams(location.search);
-  const videoUrl = params.get('video_url');
-  console.log(`videoUrl ${videoUrl}`)
+
   const LANDING_APIURL = import.meta.env.VITE_API_BASE_URL;
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -53,7 +51,6 @@ const LoginForm: React.FC = () => {
         const formattedTime = `${horas12}:${minutos} ${ampm} ${dia} ${mesAbrev} ${ano}`;
         localStorage.setItem('login_time', formattedTime);
         login(result.api_key);
-        console.log(videoUrl)
         navigate(`/dashboard`);
       } catch (err) {
         console.error('Erro ao fazer login:', err);
@@ -97,7 +94,7 @@ const LoginForm: React.FC = () => {
       <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
         <div className="w-full max-w-md mx-auto lg:mx-0">
           <div className="text-center mb-8">
-            <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'} mb-2`}>Support AI Employers</h1>
+            <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'} mb-2`}>AI Support Workers</h1>
           </div>
           <Card className={`border-0 shadow-xl transition-colors duration-300 ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <CardHeader className="text-center pb-2">
