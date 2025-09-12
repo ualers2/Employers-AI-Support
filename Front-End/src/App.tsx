@@ -7,6 +7,7 @@ import Index from "./pages/Index";
 import LoginForm from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./contexts/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -19,7 +20,14 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<LoginForm />} />
-            <Route path="/dashboard" element={<Index />} />
+            <Route 
+              path="/dashboard" 
+              element={
+                <ProtectedRoute>
+                  <Index />
+                </ProtectedRoute>
+              } 
+            />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

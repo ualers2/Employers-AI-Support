@@ -1,0 +1,10 @@
+Flask
+python-dotenv
+openai-agents
+requests
+asyncio
+firebase_admin
+
+
+
+

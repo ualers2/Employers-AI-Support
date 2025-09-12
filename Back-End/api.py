@@ -4,12 +4,12 @@ import os
 import logging
 import uuid
 import json
+import re
 import asyncio
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from typing import List, Dict
-from firebase_admin import db
 from datetime import datetime, timedelta, timezone
 from docker import DockerClient, errors
 import docker 
@@ -20,13 +20,20 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import time
 from sqlalchemy import desc, func, and_
+from flask_cors import CORS
 
+from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
 
-from ClienteChat.ai import CustomerChatAgent
+from Modules.FileServer.upload_ import upload_
+from Modules.FileServer.download_ import download_
+from Modules.FileServer.delete_file import delete_file
+
+from ClientChat.ai import CustomerChatAgent
 from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
+CORS(app, origins=["https://mediacutsstudio.com", "https://employers-ai-support.rshare.io"])
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
@@ -39,16 +46,9 @@ except docker.errors.DockerException as e:
     logger.warning(f"Não foi possível conectar ao Docker: {e}")
     client = None 
 
-# app_1 = init_firebase()
-# db_ref = db.reference('configurations', app=app_1) 
-# users_db_ref = db.reference('users', app=app_1)
-# messages_db_ref = db.reference('messages', app=app_1) 
-# telegram_status_ref = db.reference('alfred_status/Telegram', app=app_1)     
-# discord_status_ref = db.reference('alfred_status/Discord', app=app_1)     
-# WhatsApp_status_ref = db.reference('alfred_status/WhatsApp', app=app_1)    
-# alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
-
 UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
+project_name = os.getenv("Employers_AI_Support")
+USER_ID_FOR_TEST = os.getenv("USER_ID_FOR_TEST")
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'Knowledge')
 if not os.path.exists(UPLOAD_FOLDER):
@@ -57,7 +57,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 METADATA_FILE_PATH = os.path.join(UPLOAD_FOLDER, 'alfred_files_metadata.json')
 last_alfred_heartbeat = datetime.now(timezone.utc)
 
-# Configuração do banco PostgreSQL
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:postgres@meu_postgres:5432/meubanco"
@@ -127,7 +126,7 @@ def chat_assistant():
 
         user_context = data.get("user_context", {})
         conversation_history = data.get("conversation_history", [])
-        user_id = user_context.get("user_id")
+        user_id = "freitasalexandre810@gmail.com"
         session_id = data.get("session_id") or str(uuid.uuid4())
         enable_analytics = data.get("enable_analytics", True)
         model = data.get("model", "gpt-5-nano")
@@ -276,8 +275,8 @@ def upload_alfred_file():
         file_stats = os.stat(file_path)
         file_size_bytes = file_stats.st_size
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime)
+        file_id = upload_(project_name, file_path, USER_ID_FOR_TEST)
 
-        # Salvar no PostgreSQL vinculado ao usuário
         alfred_file = AlfredFile(
             unique_filename=unique_filename,
             original_filename=file.filename,
@@ -285,9 +284,9 @@ def upload_alfred_file():
             caption=caption,
             size_bytes=file_size_bytes,
             last_modified_local=last_modified_timestamp,
-            local_path=file_path,
-            url_download=f"/api/alfred-files/download/{unique_filename}",
-            url_content=f"/api/alfred-files/{unique_filename}/content",
+            file_id=file_id,
+            url_download=f"{UPLOAD_URL_VIDEOMANAGER}/api/projects/{project_name}/videos/{file_id}/download",
+            url_content=f"{UPLOAD_URL_VIDEOMANAGER}/api/projects/{project_name}/files/{file_id}/content",
             uploaded_by_user_id=numeric_user_id 
         )
         db.session.add(alfred_file)
@@ -295,7 +294,7 @@ def upload_alfred_file():
 
         return jsonify({
             "message": "Arquivo carregado com sucesso.",
-            "fileId": unique_filename,
+            "fileId": file_id,
             "fileName": file.filename,
             "size": format_bytes(file_size_bytes),
             "lastModified": last_modified_timestamp.isoformat(),
@@ -327,11 +326,11 @@ def list_alfred_files():
         files_list = []
 
         for af in alfred_files:
-            if not os.path.exists(af.local_path):
-                logger.warning(f"Arquivo '{af.unique_filename}' existe no DB mas não no disco. Pulando.")
-                continue
-
-            file_stats = os.stat(af.local_path)
+            unique_filename = af.unique_filename
+            file_id = af.file_id
+            save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
+            local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+            file_stats = os.stat(local_path)
             last_modified_dt = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
 
             files_list.append({
@@ -341,7 +340,7 @@ def list_alfred_files():
                 "size": format_bytes(file_stats.st_size),
                 "lastModified": last_modified_dt.isoformat(),
                 "url": af.url_download,
-                "localPath": af.local_path
+                "file_id": af.file_id
             })
 
         return jsonify(files_list), 200
@@ -379,22 +378,32 @@ def update_alfred_file_content(fileId):
         if not isinstance(new_content, str):
             return jsonify({"error": "'content' deve ser string."}), 400
 
-        if not os.path.exists(alfred_file.local_path):
-            return jsonify({"error": "Arquivo não existe no disco."}), 404
+        # if not os.path.exists(alfred_file.local_path):
+        #     return jsonify({"error": "Arquivo não existe no disco."}), 404
+        
 
-        with open(alfred_file.local_path, 'w', encoding='utf-8') as f:
+        unique_filename = alfred_file.unique_filename
+        file_id = alfred_file.file_id
+        save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
+        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+        
+
+        with open(local_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
-        file_stats = os.stat(alfred_file.local_path)
+        file_stats = os.stat(local_path)
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
 
+        file_id = upload_(project_name, local_path, USER_ID_FOR_TEST)
+
+        alfred_file.file_id = file_id
         alfred_file.size_bytes = file_stats.st_size
         alfred_file.last_modified_local = last_modified_timestamp
         db.session.commit()
 
         return jsonify({
             "message": "Conteúdo atualizado com sucesso.",
-            "fileId": fileId,
+            "fileId": file_id,
             "lastModified": last_modified_timestamp.isoformat()
         }), 200
 
@@ -423,8 +432,8 @@ def get_alfred_file_content(fileId):
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
 
-        if not os.path.exists(alfred_file.local_path):
-            return jsonify({"error": "Arquivo não existe no disco."}), 404
+        # if not os.path.exists(alfred_file.local_path):
+        #     return jsonify({"error": "Arquivo não existe no disco."}), 404
 
         file_extension = alfred_file.original_filename.rsplit('.', 1)[-1].lower() if '.' in alfred_file.original_filename else ''
         allowed_readable_extensions = {'md', 'txt', 'csv', 'json'}
@@ -432,10 +441,15 @@ def get_alfred_file_content(fileId):
         if file_extension not in allowed_readable_extensions:
             return jsonify({"error": "Visualização não suportada para este tipo de arquivo."}), 400
 
-        with open(alfred_file.local_path, 'r', encoding='utf-8') as f:
+        unique_filename = alfred_file.unique_filename
+        file_id = alfred_file.file_id
+        save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
+        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+
+        with open(local_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        last_modified_timestamp = datetime.fromtimestamp(os.path.getmtime(alfred_file.local_path), tz=timezone.utc)
+        last_modified_timestamp = datetime.fromtimestamp(os.path.getmtime(local_path), tz=timezone.utc)
 
         return jsonify({
             "id": fileId,
@@ -467,11 +481,18 @@ def download_alfred_file(fileId):
         alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=numeric_user_id).first()
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
-
-        if not os.path.exists(alfred_file.local_path):
+        
+        unique_filename = alfred_file.unique_filename
+        file_id = alfred_file.file_id
+        save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
+        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+        
+        # file_id = upload_(project_name, local_path, USER_ID_FOR_TEST)
+        
+        if not os.path.exists(local_path):
             return jsonify({"error": "Arquivo não encontrado no disco."}), 404
 
-        filename_on_disk = os.path.basename(alfred_file.local_path)
+        filename_on_disk = os.path.basename(local_path)
 
         return send_from_directory(
             UPLOAD_FOLDER,
@@ -488,117 +509,107 @@ def download_alfred_file(fileId):
 def delete_alfred_file(fileId):
     """
     Remove um arquivo Alfred apenas se pertence ao usuário do contexto.
+    Aceita user_id via query param (?user_id=...) ou via header 'X-User-Id'.
+    Tenta também inferir project_name para remover no storage remoto (se possível).
     """
     try:
-        user_id = request.args.get("user_id")
-        if not user_id:
-            return jsonify({"error": "user_id é obrigatório."}), 400
+        # 1) aceitar user_id tanto por query param quanto por header
+        raw_user_id = request.args.get("user_id") or request.headers.get('X-User-Id')
+        if not raw_user_id:
+            return jsonify({"error": "user_id é obrigatório (query param ?user_id=... ou header X-User-Id)."}), 400
 
-        user = resolve_user_identifier(user_id)
+        # Normalização que você usa em outros lugares (se resolve_user_identifier espera email com '.' etc)
+        user = resolve_user_identifier(raw_user_id)
         if not user:
             return jsonify({"error": "Usuário não encontrado."}), 404
-        
         numeric_user_id = user.id
+        user_email = user.email
 
+        # 2) buscar o registro no DB garantindo que pertence ao usuário
         alfred_file = AlfredFile.query.filter_by(unique_filename=fileId, uploaded_by_user_id=numeric_user_id).first()
         if not alfred_file:
             return jsonify({"error": "Arquivo não encontrado para este usuário."}), 404
 
-        if os.path.exists(alfred_file.local_path):
-            os.remove(alfred_file.local_path)
-            logger.info(f"Arquivo '{fileId}' excluído do disco.")
+        # 3) determinar project_name (várias fontes de fallback)
+        # - prefer query param 'project'
+        # - senão pega channel_id (se você salvou o project_name ali)
+        # - senão tenta extrair do campo url_download (padrão: .../api/projects/<project_name>/videos/<file_id>/download)
+        project_name = request.args.get('project') or (alfred_file.channel_id if hasattr(alfred_file, 'channel_id') else None)
 
-        db.session.delete(alfred_file)
-        db.session.commit()
+        def _extract_project_from_url(url):
+            if not url: return None
+            try:
+                # procura "/api/projects/<project_name>/videos/"
+                marker = "/api/projects/"
+                if marker in url:
+                    after = url.split(marker, 1)[1]
+                    project_part = after.split("/videos/", 1)[0]
+                    # sanitize basic
+                    return re.sub(r'[^0-9A-Za-z_-]', '', project_part)
+            except Exception:
+                return None
+            return None
 
-        return jsonify({"message": "Arquivo excluído com sucesso."}), 200
+        if not project_name:
+            project_name = _extract_project_from_url(alfred_file.url_download if alfred_file.url_download else None)
+
+        # 4) preparar infos locais
+        unique_filename = alfred_file.unique_filename
+        file_id = getattr(alfred_file, "file_id", None)  # pode ser None em casos antigos
+        local_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
+
+        # 5) tentar deletar no storage remoto (se tivermos project_name e file_id)
+        remote_deleted = False
+        remote_resp = None
+        UPLOAD_URL = os.getenv("UPLOAD_URL") or None
+
+        # Se a função cliente delete_file estiver disponível no módulo, a chamamos.
+        # A função delete_file espera (project_name, file_id, USER_ID_FOR_TEST, UPLOAD_URL=...)
+        if project_name and file_id:
+            try:
+                # Tenta obter upload url do próprio registro se não houver env
+                upload_base = UPLOAD_URL or (alfred_file.url_download.split("/api/projects/")[0] if alfred_file.url_download else None)
+                remote_resp = delete_file(project_name, file_id, user_email, UPLOAD_URL=upload_base)
+                remote_deleted = bool(remote_resp)
+            except Exception as e:
+                logger.warning(f"[delete_alfred_file] Falha ao tentar remover arquivo remoto: {e}", exc_info=True)
+                remote_deleted = False
+        else:
+            logger.info("[delete_alfred_file] project_name ou file_id ausente, pulando remoção remota.")
+
+        # 6) remover arquivo local (se existir)
+        local_deleted = False
+        if os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+                local_deleted = True
+                logger.info(f"[delete_alfred_file] Arquivo local removido: {local_path}")
+            except Exception as e:
+                logger.warning(f"[delete_alfred_file] Falha ao remover arquivo local: {e}", exc_info=True)
+
+        # 7) remover registro DB
+        try:
+            db.session.delete(alfred_file)
+            db.session.commit()
+        except Exception as e:
+            logger.exception(f"[delete_alfred_file] Erro ao remover registro DB: {e}")
+            db.session.rollback()
+            return jsonify({"error": "Erro ao remover registro no banco."}), 500
+
+
+        return jsonify({
+            "message": "Arquivo excluído com sucesso (DB atualizado).",
+            "fileId": fileId,
+            "removedFromDisk": local_deleted,
+            "remoteDeletionAttempted": bool(project_name and file_id),
+            "remoteDeletionResult": remote_deleted,
+            "remoteResponse": remote_resp
+        }), 200
 
     except Exception as e:
         logger.exception(f"Erro ao excluir arquivo {fileId}: {e}")
         return jsonify({"error": "Erro interno ao excluir o arquivo."}), 500
-    
-@app.route('/api/messages/recent', methods=['GET'])
-def list_recent_messages():
-    """
-    Lista interações recentes apenas do usuário autenticado.
-    """
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"error": "user_id é obrigatório."}), 400
 
-    user = resolve_user_identifier(user_id)
-    if not user:
-        return jsonify({"error": "Usuário não encontrado."}), 404
-    
-    numeric_user_id = user.id
-
-    limit = request.args.get('limit', default=10, type=int)
-
-    query = db.session.query(
-        Message.session_id,
-        func.max(Message.created_at).label('last_timestamp'),
-        func.max(Message.id).label('last_message_id')
-    ).filter_by(user_id=numeric_user_id).group_by(Message.session_id)
-
-    query = query.order_by(desc('last_timestamp')).limit(limit)
-    results = query.all()
-
-    interactions = []
-    for row in results:
-        last_message = Message.query.get(row.last_message_id)
-        user_obj = last_message.user
-        interactions.append({
-            "id": row.session_id,
-            "user": user_obj.email if user_obj else "Unknown User",
-            "userId": user_obj.id if user_obj else None,
-            "message": last_message.content,
-            "timestamp": last_message.created_at.isoformat(),
-            "status": "responded"
-        })
-
-    return jsonify(interactions), 200
-
-@app.route('/api/messages/<string:session_id>', methods=['GET'])
-def get_interaction_details(session_id):
-    """
-    Retorna mensagens de uma interação, restrita ao usuário dono.
-    """
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"error": "user_id é obrigatório."}), 400
-
-    user = resolve_user_identifier(user_id)
-    if not user:
-        return jsonify({"error": "Usuário não encontrado."}), 404
-    
-    numeric_user_id = user.id
-
-    messages = Message.query.filter_by(session_id=session_id, user_id=numeric_user_id).order_by(Message.created_at).all()
-    if not messages:
-        return jsonify({"error": "Interação não encontrada para este usuário."}), 404
-
-    user_obj = messages[0].user if messages else None
-
-    formatted_messages = [
-        {
-            "messageId": m.id,
-            "sender": m.role,
-            "timestamp": m.created_at.isoformat(),
-            "content": m.content
-        }
-        for m in messages
-    ]
-
-    return jsonify({
-        "interactionId": session_id,
-        "user": {
-            "name": user_obj.email if user_obj else "Unknown",
-            "id": user_obj.id if user_obj else None,
-        },
-        "status": "responded",
-        "messages": formatted_messages
-    }), 200
-    
 @app.route('/api/users', methods=['GET'])
 def list_users():
     search_term = request.args.get('searchTerm', '').lower()
@@ -644,7 +655,6 @@ def ban_user(user_id):
     
     return jsonify({"message": "Usuário banido com sucesso.", "userId": user.id, "status": user.status})
 
-
 @app.route('/api/users/<int:user_id>/unban', methods=['POST'])
 def unban_user(user_id):
 
@@ -659,6 +669,95 @@ def unban_user(user_id):
     
     return jsonify({"message": "Usuário desbanido com sucesso.", "userId": user.id, "status": user.status})
 
+
+
+@app.route('/api/messages/recent', methods=['GET'])
+def list_recent_messages():
+    """
+    Lista interações recentes apenas do usuário autenticado.
+    """
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório."}), 400
+
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+
+    limit = request.args.get('limit', default=10, type=int)
+
+    query = db.session.query(
+        Message.session_id,
+        func.max(Message.created_at).label('last_timestamp'),
+        func.max(Message.id).label('last_message_id')
+    ).filter(
+        (Message.user_id == numeric_user_id) | (Message.session_id != None)
+    ).group_by(Message.session_id)
+
+    query = query.order_by(desc('last_timestamp')).limit(limit)
+    results = query.all()
+
+    interactions = []
+    for row in results:
+        last_message = Message.query.get(row.last_message_id)
+        user_obj = last_message.user
+        interactions.append({
+            "id": row.session_id,
+            "user": user_obj.email if user_obj else "Unknown User",
+            "userId": user_obj.id if user_obj else None,
+            "message": last_message.content,
+            "timestamp": last_message.created_at.isoformat(),
+            "status": "responded"
+        })
+
+    return jsonify(interactions), 200
+
+@app.route('/api/messages/<string:session_id>', methods=['GET'])
+def get_interaction_details(session_id):
+    """
+    Retorna mensagens de uma interação, restrita ao usuário dono.
+    """
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório."}), 400
+
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+
+    messages = Message.query.filter(
+        Message.session_id == session_id,
+        (Message.user_id == numeric_user_id) | (Message.session_id != None)
+    ).order_by(Message.created_at).all()
+    if not messages:
+        return jsonify({"error": "Interação não encontrada para este usuário."}), 404
+
+    user_obj = messages[0].user if messages else None
+
+    formatted_messages = [
+        {
+            "messageId": m.id,
+            "sender": m.role,
+            "timestamp": m.created_at.isoformat(),
+            "content": m.content
+        }
+        for m in messages
+    ]
+
+    return jsonify({
+        "interactionId": session_id,
+        "user": {
+            "name": user_obj.email if user_obj else "Unknown",
+            "id": user_obj.id if user_obj else None,
+        },
+        "status": "responded",
+        "messages": formatted_messages
+    }), 200
+    
 @app.route('/api/metrics/realtime', methods=['GET'])
 def get_realtime_metrics():
     try:
@@ -678,7 +777,7 @@ def get_realtime_metrics():
 
         # 1) messages in last hour for this user
         messages_in_last_hour = Message.query.filter(
-            Message.user_id == numeric_user_id,
+            ((Message.user_id == numeric_user_id) | (Message.session_id != None)),
             Message.created_at >= one_hour_ago
         ).count()
 
@@ -693,7 +792,10 @@ def get_realtime_metrics():
         total_response_time = 0.0
         response_count = 0
 
-        msgs = Message.query.filter_by(user_id=numeric_user_id).order_by(Message.session_id, Message.created_at).all()
+        msgs = Message.query.filter(
+            (Message.user_id == numeric_user_id) | (Message.session_id != None)
+        ).order_by(Message.session_id, Message.created_at).all()
+        
         from collections import defaultdict
         sessions = defaultdict(list)
         for m in msgs:
@@ -768,8 +870,11 @@ def list_activities():
         all_activities = []
         activity_id_counter = 0
 
-        # 1. Activities from messages (user only)
-        msgs = Message.query.filter_by(user_id=numeric_user_id).order_by(Message.session_id, Message.created_at).all()
+        # 1. Activities from messages (chat + telegram)
+        msgs = Message.query.filter(
+            (Message.user_id == numeric_user_id) | (Message.session_id != None)
+        ).order_by(Message.session_id, Message.created_at).all()
+
         from collections import defaultdict
         sessions = defaultdict(list)
         for m in msgs:
@@ -923,6 +1028,7 @@ def clear_activities():
         logger.error(f"Error clearing activities: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao limpar o log de atividades."}), 500
 
+
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
     try:
@@ -933,28 +1039,47 @@ def get_dashboard_stats():
         user = resolve_user_identifier(user_id)
         if not user:
             return jsonify({"error": "Usuário não encontrado."}), 404
-        
+
         numeric_user_id = user.id
 
         now = datetime.now(timezone.utc)
         today_24h_ago = now - timedelta(hours=24)
         yesterday_24h_ago = today_24h_ago - timedelta(hours=24)
 
-        messages_today = Message.query.filter(
-            Message.user_id == numeric_user_id,
-            Message.created_at >= today_24h_ago
+        # --- Mensagens de USER (chat e telegram) ---
+        user_messages_today = Message.query.filter(
+            ((Message.user_id == numeric_user_id) | (Message.session_id != None)),
+            Message.created_at >= today_24h_ago,
+            Message.role == "user"
         ).all()
-        messages_yesterday = Message.query.filter(
-            Message.user_id == numeric_user_id,
+
+        user_messages_yesterday = Message.query.filter(
+            ((Message.user_id == numeric_user_id) | (Message.session_id != None)),
             Message.created_at >= yesterday_24h_ago,
-            Message.created_at < today_24h_ago
+            Message.created_at < today_24h_ago,
+            Message.role == "user"
         ).all()
 
-        active_users_today = {m.user_id for m in messages_today if m.user_id}
-        active_users_yesterday = {m.user_id for m in messages_yesterday if m.user_id}
+        # --- Mensagens do ASSISTANT (chat e telegram) ---
+        assistant_messages_today = Message.query.filter(
+            ((Message.user_id == numeric_user_id) | (Message.session_id != None)),
+            Message.created_at >= today_24h_ago,
+            Message.role == "assistant"
+        ).all()
 
-        alfred_responses_today = sum(1 for m in messages_today if m.role == "assistant")
-        alfred_responses_yesterday = sum(1 for m in messages_yesterday if m.role == "assistant")
+        assistant_messages_yesterday = Message.query.filter(
+            ((Message.user_id == numeric_user_id) | (Message.session_id != None)),
+            Message.created_at >= yesterday_24h_ago,
+            Message.created_at < today_24h_ago,
+            Message.role == "assistant"
+        ).all()
+
+        # --- Métricas ---
+        active_users_today = {m.user_id for m in user_messages_today if m.user_id}
+        active_users_yesterday = {m.user_id for m in user_messages_yesterday if m.user_id}
+
+        total_messages_today = len(user_messages_today) + len(assistant_messages_today)
+        total_messages_yesterday = len(user_messages_yesterday) + len(assistant_messages_yesterday)
 
         files_managed = AlfredFile.query.filter_by(uploaded_by_user_id=numeric_user_id).count()
 
@@ -964,13 +1089,13 @@ def get_dashboard_stats():
             return round(((current - previous) / previous) * 100, 2)
 
         stats = {
-            "totalMessages": len(messages_today) + len(messages_yesterday),
+            "totalMessages": total_messages_today + total_messages_yesterday,
             "activeUsers": len(active_users_today),
-            "alfredResponses": alfred_responses_today,
+            "alfredResponses": len(assistant_messages_today),
             "filesManaged": files_managed,
-            "totalMessagesChangePercentage": calculate_percentage_change(len(messages_today), len(messages_yesterday)),
+            "totalMessagesChangePercentage": calculate_percentage_change(total_messages_today, total_messages_yesterday),
             "activeUsersChangePercentage": calculate_percentage_change(len(active_users_today), len(active_users_yesterday)),
-            "alfredResponsesChangePercentage": calculate_percentage_change(alfred_responses_today, alfred_responses_yesterday)
+            "alfredResponsesChangePercentage": calculate_percentage_change(len(assistant_messages_today), len(assistant_messages_yesterday))
         }
 
         return jsonify(stats), 200
@@ -978,7 +1103,6 @@ def get_dashboard_stats():
     except Exception as e:
         logger.error(f"Error getting dashboard statistics: {e}", exc_info=True)
         return jsonify({"error": "Erro no servidor ao buscar as estatísticas do dashboard."}), 500
-
 
 @app.route('/api/alfred/status', methods=['GET'])
 def get_alfred_status():
@@ -1001,27 +1125,66 @@ def get_alfred_status():
             "lastHeartbeat": None
         }
 
+        # Status default
         current_status = "offline"
-        current_message = "Alfred está offline ou inacessível."
+        messages = []  # 👈 acumula mensagens de cada agente
 
         agents = AgentStatus.query.filter_by(user_id=numeric_user_id).all()
         now = datetime.now(timezone.utc)
 
-        for agent in agents:
-            heartbeat = agent.last_update.isoformat() if agent.last_update else None
-            if agent.platform.lower() == "telegram":
-                details["telegramApiConnected"] = (agent.status == "online")
-                details["lastHeartbeat"] = heartbeat
-                if agent.status == "online" and agent.last_update and (now - agent.last_update) < timedelta(days=1):
-                    current_status = "online"
-                    current_message = "(Telegram) Conectado."
-                elif agent.status == "online":
-                    current_status = "degraded"
-                    current_message = "Alfred (Telegram) online, mas último update é antigo."
-            elif agent.platform.lower() == "discord":
-                details["DiscordApiConnected"] = (agent.status == "online")
-            elif agent.platform.lower() == "whatsapp":
-                details["WhatsAppApiConnected"] = (agent.status == "online")
+        if agents:
+            for agent in agents:
+                heartbeat = agent.last_update.isoformat() if agent.last_update else None
+                agent_msg = None
+
+                if agent.platform.lower() == "telegram":
+                    details["telegramApiConnected"] = (agent.status == "online")
+                    details["lastHeartbeat"] = heartbeat
+                    if agent.last_update:
+                        last_update = agent.last_update
+                        if last_update.tzinfo is None:
+                            last_update = last_update.replace(tzinfo=timezone.utc)
+
+                        if (now - last_update) < timedelta(minutes=5):
+                            agent_msg = "(Telegram) Conectado."
+                        else:
+                            agent_msg = "Alfred (Telegram) online, mas último update é antigo."
+                    else:
+                        agent_msg = "(Telegram) Sem heartbeat."
+
+                elif agent.platform.lower() == "discord":
+                    details["DiscordApiConnected"] = (agent.status == "online")
+                    details["lastHeartbeat"] = heartbeat
+                    if agent.last_update:
+                        last_update = agent.last_update
+                        if last_update.tzinfo is None:
+                            last_update = last_update.replace(tzinfo=timezone.utc)
+
+                        if (now - last_update) < timedelta(minutes=5):
+                            agent_msg = "(Discord) Conectado."
+                        else:
+                            agent_msg = "Alfred (Discord) online, mas último update é antigo."
+                    else:
+                        agent_msg = "(Discord) Sem heartbeat."
+
+                elif agent.platform.lower() == "whatsapp":
+                    details["WhatsAppApiConnected"] = (agent.status == "online")
+                    details["lastHeartbeat"] = heartbeat
+                    agent_msg = "(WhatsApp) Conectado." if agent.status == "online" else "(WhatsApp) Offline."
+
+                if agent_msg:
+                    messages.append(agent_msg)
+
+            # define status geral
+            if any([details["telegramApiConnected"], details["DiscordApiConnected"], details["WhatsAppApiConnected"]]):
+                current_status = "online"
+            else:
+                current_status = "offline"
+
+            current_message = " ".join(messages) if messages else "Nenhum agente ativo."
+
+        else:
+            current_message = "Nenhum agente registrado para este usuário."
 
         return jsonify({
             "status": current_status,
@@ -1282,32 +1445,6 @@ def trocar_code_por_token(code):
     return resp.json()
 
 
-
-def resolve_user_identifier(identifier):
-    """
-    Aceita:
-     - None -> retorna None
-     - número (string ou int) -> busca por id
-     - string com @ -> busca por email
-     - string sem @ -> tenta converter para int, senão retorna None
-    Retorna User instance ou None.
-    """
-    if not identifier:
-        return None
-
-    # Se já for int
-    try:
-        uid = int(identifier)
-        return User.query.get(uid)
-    except (ValueError, TypeError):
-        pass
-
-    # se parecer email
-    if isinstance(identifier, str) and "@" in identifier:
-        return User.query.filter_by(email=identifier).first()
-
-    # fallback: tenta buscar por email ignorando espaços
-    return User.query.filter_by(email=str(identifier).strip()).first()
 
 def _enrich_user_context(user_context: Dict[str, Any], request_obj) -> Dict[str, Any]:
     """Enriquece o contexto do usuário com informações da requisição"""

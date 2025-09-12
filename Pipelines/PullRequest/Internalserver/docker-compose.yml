@@ -1,0 +1,23 @@
+
+services:
+  pipeline_employers_ai_support:
+    build: .
+    container_name: pipeline_employers_ai_support
+    working_dir: /app  
+    privileged: true     # necessário para Docker-in-Docker
+    volumes:
+      # - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: always
+    ports:
+      - "5094:5094"
+    command: > 
+      sh -c "python observer.py"
+    mem_limit: 800MB
+    cpus: "2.25"   
+    networks:
+      - rede_externa
+
+networks:
+  rede_externa:
+    external: true
