@@ -34,7 +34,8 @@ from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
-CORS(app, origins=["https://mediacutsstudio.com", "https://employers-ai-support.rshare.io"])
+asgi_app = WsgiToAsgi(app)
+CORS(app, origins=["https://mediacutsstudio.com", "https://employers-ai-support.rshare.io", "https://ai-support-workers.rshare.io"])
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
@@ -61,7 +62,6 @@ last_alfred_heartbeat = datetime.now(timezone.utc)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-asgi_app = WsgiToAsgi(app)
 
 db.init_app(app)
 

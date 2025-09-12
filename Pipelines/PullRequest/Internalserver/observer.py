@@ -153,47 +153,9 @@ def fetch_pr_diff_via_api(pr_api_url: str, token: str) -> str:
             diff_parts.append(f"--- {f['filename']}\n{f['patch']}")
     return "\n".join(diff_parts)
 
-def reset_all_users_tasks():
-    """
-    Reseta as tarefas de todos os usuários antes da build/deploy.
-    Também percorre a fila e redefine status 'Running' para 'PENDING'.
-    """
-    try:
-        root_ref = db.reference('Users_Control_Panel', app=app1)
-        users_data = root_ref.get()
-
-        shortify_queue_ref = db.reference('shortify_queue', app=app1)
-        queue_data = shortify_queue_ref.get()
-
-        # Reset dos usuários
-        if users_data:
-            for api_key, data in users_data.items():
-                user_ref = db.reference(f'Users_Control_Panel/{api_key}', app=app1)
-                user_ref.update({
-                    'projects_running': 0,
-                })
-            logger.info("✅ Todas as tarefas dos usuários foram resetadas com sucesso.")
-        else:
-            logger.info("Nenhum usuário encontrado para resetar tarefas.")
-
-        # Reset da fila (shortify_queue)
-        if queue_data:
-            for task_id, task in queue_data.items():
-                if task.get("status") == "Running":
-                    task_ref = shortify_queue_ref.child(task_id)
-                    task_ref.update({"status": "PENDING"})
-                    logger.info(f"🔄 Tarefa {task_id} alterada de Running para PENDING.")
-            logger.info("✅ Todas as tarefas em execução foram redefinidas para PENDING.")
-        else:
-            logger.info("Nenhum queue encontrado para resetar tarefas.")
-
-    except Exception as e:
-        logger.error(f"Erro ao resetar tarefas dos usuários: {e}")
-
 def process_pull_request(pr_url, pr_diff_url, pr_number, pr_title, current_pr_body):
     try:
-        logger.info(f"DEBUG: reset all users tasks") 
-        reset_all_users_tasks()
+
         files_api_url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}/files"
         diff_content = fetch_pr_diff_via_api(files_api_url, GITHUB_TOKEN)
         logger.info(f"DEBUG: pr_diff_url original do payload: {pr_diff_url}") 
@@ -319,11 +281,11 @@ def deploy_containers():
 
     copy_filess(docker_compose_origin, docker_compose_destin)
 
+    up_service("postgres_1", path)
 
     up_service("frontend_support_prod", path)
     up_service("api_support_prod", path)
     up_service("evolution_api_prod", path)
-    up_service("postgres_prod", path)
 
 
 def wait_container_running(service_name, cwd, timeout=120, interval=2):
