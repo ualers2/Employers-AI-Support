@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+asgiref
 Flask
 flask-cors
 Flask-Limiter
