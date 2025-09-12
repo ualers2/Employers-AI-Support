@@ -2,16 +2,16 @@
 version: '3.8'
 services:
 
-  meu_postgres_dev:
+  meu_postgres:
     image: postgres:15
-    container_name: meu_postgres_dev
+    container_name: meu_postgres
     restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: meubanco
     ports:
-      - "5832:5832"
+      - "5432:5432"
     networks: 
       - rede_externa
     volumes:
@@ -44,12 +44,12 @@ services:
     cpus: "1.5"
 
 
-  api_support-dev:
+  api_support_dev:
     image: api-support-dev:latest
     privileged: true    
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
-      - DATABASE_URL=postgresql://postgres:postgres@meu_postgres_dev:5832/meubanco
+      - DATABASE_URL=postgresql://postgres:postgres@meu_postgres:5432/meubanco
     build:
       context: ./Back-End
       dockerfile: Dockerfile
@@ -61,10 +61,10 @@ services:
     container_name: api_support_dev
     restart: always
     ports:
-      - "4959:4959"
-    command: flask --app api:app run --host=0.0.0.0 --port=4959
+      - "4953:4953"
+    command: flask --app api:app run --host=0.0.0.0 --port=4953
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:4959"] 
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:4953"] 
       interval: 129s
       timeout: 2s 
       retries: 5
@@ -88,8 +88,8 @@ services:
       context: ./Back-End
       dockerfile: Dockerfile
     working_dir: /app
-    command: >
-      sh -c "python Telegram.py"
+    # command: >
+    #   sh -c "python Telegram.py"
     networks:
       - rede_externa
     mem_limit: 500MB
@@ -106,8 +106,8 @@ services:
       context: ./Back-End
       dockerfile: Dockerfile
     working_dir: /app
-    command: >
-      sh -c "python Discord.py"
+    # command: >
+    #   sh -c "python Discord.py"
     networks:
       - rede_externa
     mem_limit: 500MB
@@ -126,8 +126,8 @@ services:
     build:
       context: ./Back-End
       dockerfile: Dockerfile
-    command: >
-      sh -c "ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200"
+    # command: >
+    #   sh -c "ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200"
     ports:
       - "5200:5200"
     working_dir: /app

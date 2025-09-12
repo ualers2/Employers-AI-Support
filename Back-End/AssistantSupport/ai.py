@@ -1,4 +1,4 @@
-
+# Back-End\AssistantSupport\ai.py
 from agents import Agent, handoff, RunContextWrapper, Runner
 import requests
 from dotenv import load_dotenv, find_dotenv
@@ -6,9 +6,10 @@ import os
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from pydantic import BaseModel
 import logging
-# from firebase_admin import db
-from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 
+from api import app
+from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
+from Modules.FileServer.download_ import download_
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,12 +23,12 @@ class Alfred:
     o agente pode ser inferido pelo usuario via `telegram` e `discord` e `WhatsApp`
 
     """
-    def __init__(self, app_1):
+    def __init__(self):
         self.logger = logging.getLogger(__name__)
         if not self.logger.handlers:
             logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
        
-        self.app_1 = app_1
+        # self.app_1 = app_1
         # self.alfred_files_metadata_ref = db.reference('alfred_knowledge_metadata', app=app_1)
      
         self.nameAlfred = "Alfred"
@@ -43,7 +44,9 @@ class Alfred:
 
         load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../', 'Keys', 'keys.env'))
 
-                
+        self.UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
+        self.project_name = os.getenv("Employers_AI_Support")
+        self.USER_ID_FOR_TEST = os.getenv("USER_ID_FOR_TEST")
 
     # def get_alfred_local_file_paths(self):
     #     """
@@ -91,31 +94,36 @@ class Alfred:
         O user_identifier pode ser id (int) ou email (str).
         """
         try:
-            # 🔹 Resolver user_identifier (email ou id) para sempre virar user_id
-            if isinstance(user_identifier, int) or str(user_identifier).isdigit():
-                user = User.query.get(int(user_identifier))
-            else:
-                user = User.query.filter_by(email=user_identifier).first()
-
-            if not user:
-                self.logger.info(f"Usuário '{user_identifier}' não encontrado.")
-                return []
-
-            # Buscar arquivos pelo uploaded_by_user_id
-            files = AlfredFile.query.filter_by(uploaded_by_user_id=user.id).all()
-            if not files:
-                self.logger.info(f"Nenhum arquivo encontrado para usuário {user.id} ({user.email})")
-                return []
-
-            local_paths = []
-            for f in files:
-                if f.local_path and os.path.exists(f.local_path):
-                    local_paths.append(f.local_path)
+            with app.app_context():
+                # 🔹 Resolver user_identifier (email ou id) para sempre virar user_id
+                if isinstance(user_identifier, int) or str(user_identifier).isdigit():
+                    user = User.query.get(int(user_identifier))
                 else:
-                    self.logger.warning(f"Arquivo não encontrado no disco: {f.local_path}")
+                    user = User.query.filter_by(email=user_identifier).first()
 
-            self.logger.info(f"Retornados {len(local_paths)} arquivos para o usuário {user.id} ({user.email})")
-            return local_paths
+                if not user:
+                    self.logger.info(f"Usuário '{user_identifier}' não encontrado.")
+                    return []
+
+                # Buscar arquivos pelo uploaded_by_user_id
+                files = AlfredFile.query.filter_by(uploaded_by_user_id=user.id).all()
+                if not files:
+                    self.logger.info(f"Nenhum arquivo encontrado para usuário {user.id} ({user.email})")
+                    return []
+
+                local_paths = []
+                for f in files:
+                    file_id  = f.file_id
+                    unique_filename = f.unique_filename
+                    save_path = os.path.join(os.path.dirname(__file__), "../", "Knowledge", f"{unique_filename}")
+                    local_path = download_(self.UPLOAD_URL_VIDEOMANAGER, save_path, self.project_name, file_id, self.USER_ID_FOR_TEST)
+                    if local_path and os.path.exists(local_path):
+                        local_paths.append(local_path)
+                    else:
+                        self.logger.warning(f"Arquivo não encontrado no disco: {f.local_path}")
+
+                self.logger.info(f"Retornados {len(local_paths)} arquivos para o usuário {user.id} ({user.email})")
+                return local_paths
 
         except Exception as e:
             self.logger.error(f"Erro ao buscar arquivos do usuário {user_identifier}: {e}", exc_info=True)
@@ -134,13 +142,13 @@ class Alfred:
                 except Exception as e:
                     # Logar ou lidar com erros de leitura de arquivo (permissão, corrupção, etc.)
                     print(f"Erro ao ler arquivo de texto {path}: {e}")
-            elif file_extension == 'pdf':
-                # Implementar lógica para extrair texto de PDF
-                print(f"Implementar extração de texto para PDF: {path}")
-                from PyPDF2 import PdfReader
-                reader = PdfReader(path)
-                for page in reader.pages:
-                    all_content += page.extract_text() + "\n"
+            # elif file_extension == 'pdf':
+            #     # Implementar lógica para extrair texto de PDF
+            #     print(f"Implementar extração de texto para PDF: {path}")
+            #     from PyPDF2 import PdfReader
+            #     reader = PdfReader(path)
+            #     for page in reader.pages:
+            #         all_content += page.extract_text() + "\n"
         self.logger.info(all_content)
         self.instruction = f"""
         **Contexto e informacoes:**  

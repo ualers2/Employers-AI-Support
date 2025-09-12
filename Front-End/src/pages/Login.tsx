@@ -97,7 +97,7 @@ const LoginForm: React.FC = () => {
       <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
         <div className="w-full max-w-md mx-auto lg:mx-0">
           <div className="text-center mb-8">
-            <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'} mb-2`}>Media Cuts Studio</h1>
+            <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'} mb-2`}>Support AI Employers</h1>
           </div>
           <Card className={`border-0 shadow-xl transition-colors duration-300 ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <CardHeader className="text-center pb-2">
@@ -172,7 +172,7 @@ const LoginForm: React.FC = () => {
                     <LogIn size={20} className="mr-2" />
                     Login
                   </Button>
-                  <p className="text-center text-sm mt-4">
+                  <p className="text-center text-white-600 text-sm mt-4">
                     Não tem conta?{' '}
                     <button
                       type="button"

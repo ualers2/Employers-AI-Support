@@ -10,7 +10,7 @@ def executar_comando(comando):
     subprocess.run(comando, shell=True)
 
 
-executar_comando("docker-compose up --build -d")
+executar_comando("docker-compose up --build -d ")
 
 # executar_comando("docker-compose build alfred")
 

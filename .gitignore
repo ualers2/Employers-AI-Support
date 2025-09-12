@@ -3,4 +3,12 @@ Front-End/node_modules/
 Back-End/Keys/keys.env
 Back-End/Keys/Firebase/FirebaseApp.py
 Back-End/Keys/
+Back-End/Logs/
+Back-End/Tests/
+Pipelines/PullRequest/Internalserver/keys.env
+Pipelines/PullRequest/Internalserver/Dev/
+Pipelines/PullRequest/Internalserver/Keys/
+Pipelines/PullRequest/Internalserver/Production/
+Pipelines/PullRequest/Internalserver/_test.py
+**.env
 **__pycache__

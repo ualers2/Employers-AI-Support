@@ -3,6 +3,8 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import uuid
+from sqlalchemy import Column, DateTime
+
 
 db = SQLAlchemy()
 
@@ -11,10 +13,10 @@ class User(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=True)
     name = db.Column(db.String(200), nullable=True)
-    platform_id = db.Column(db.String(200), nullable=True)  # caso você precise mapear um id externo
-    status = db.Column(db.String(50), default="active")  # 'active', 'banned', etc.
+    platform_id = db.Column(db.String(200), nullable=True)  
+    status = db.Column(db.String(50), default="active")  # 'active', 'banned'
     last_seen = db.Column(db.DateTime, nullable=True)     # corresponde a 'lastSeen' do firebase
     ban_reason = db.Column(db.Text, nullable=True)
     ban_duration = db.Column(db.String(100), nullable=True)
@@ -38,7 +40,7 @@ class AgentStatus(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     platform = db.Column(db.String(50), nullable=False)  # Removed unique=True for user-specific agents
     status = db.Column(db.String(50), nullable=False, default="offline")  # 'online', 'offline', 'degraded'
-    last_update = db.Column(db.DateTime, default=datetime.utcnow)
+    last_update = db.Column(db.DateTime(timezone=True), nullable=True)
     image_name = db.Column(db.String(200), nullable=True)
     container_name = db.Column(db.String(200), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # FIXED: Integer + ForeignKey
@@ -81,7 +83,7 @@ class AlfredFile(db.Model):
     size_bytes = db.Column(db.Integer, nullable=False)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_modified_local = db.Column(db.DateTime, nullable=True)
-    local_path = db.Column(db.String(500), nullable=False)
+    file_id = db.Column(db.String(500), nullable=False)
     url_download = db.Column(db.String(500), nullable=False)
     url_content = db.Column(db.String(500), nullable=False)
     uploaded_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # FIXED: Integer + ForeignKey

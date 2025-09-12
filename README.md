@@ -1,8 +1,5 @@
 # Employers AI: Agentes de Suporte para SaaS
-![Imagem](Docs/gifs/1.png)
-
-
-## Visão Geral
+![Imagem](Docs/gifs/Screenshot_2.png)
 
 **Employers AI** é um MVP (Produto Mínimo Viável) que revoluciona o suporte ao cliente para empresas de SaaS, utilizando **agentes de IA** para automatizar e otimizar o atendimento em múltiplos canais. O projeto centraliza a gestão de suporte em uma plataforma unificada, liberando equipes humanas para tarefas mais estratégicas.
 
@@ -102,4 +99,6 @@ Em nossa próxima fase de desenvolvimento, planejamos adicionar:
 
   * **Criação de Agentes Personalizados:** Uma nova página permitirá a criação de novos agentes com fotos, nomes e áreas de atuação personalizadas (Suporte, Vendas, Atendimento, etc.).
   * **Dashboards de Consumo:** Métricas de recursos consumidos (CPU, memória) pelos servidores de agentes (Telegram, Discord, WhatsApp).
+
   * **Integração com Ferramentas de Terceiros:** Expansão das ferramentas do agente para integrar-se com CRMs e outras plataformas.
+
