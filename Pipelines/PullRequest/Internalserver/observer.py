@@ -320,13 +320,10 @@ def deploy_containers():
     copy_filess(docker_compose_origin, docker_compose_destin)
 
 
-    up_service("frontend_support", path)
-    up_service("api_support", path)
-    # up_service("telegram", path)
-    # up_service("discord", path)
-    # up_service("whatsapp", path)
-    up_service("evolution-api", path)
-    up_service("meu_postgres", path)
+    up_service("frontend_support_prod", path)
+    up_service("api_support_prod", path)
+    up_service("evolution_api_prod", path)
+    up_service("postgres_prod", path)
 
 
 def wait_container_running(service_name, cwd, timeout=120, interval=2):

@@ -21,6 +21,7 @@ from datetime import datetime
 import time
 from sqlalchemy import desc, func, and_
 from flask_cors import CORS
+from asgiref.wsgi import WsgiToAsgi
 
 from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
 
@@ -57,20 +58,16 @@ if not os.path.exists(UPLOAD_FOLDER):
 METADATA_FILE_PATH = os.path.join(UPLOAD_FOLDER, 'alfred_files_metadata.json')
 last_alfred_heartbeat = datetime.now(timezone.utc)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@meu_postgres:5432/meubanco"
-)
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+asgi_app = WsgiToAsgi(app)
 
 db.init_app(app)
 
 with app.app_context():
-    db.create_all()  # cria tabelas se não existirem
+    db.create_all()
 
-
-# Endpoint para criar login (cadastro)
 @app.route("/api/create-login", methods=["POST"])
 def create_login():
     data = request.get_json()
@@ -92,8 +89,6 @@ def create_login():
 
     return jsonify({"message": "Usuário criado com sucesso", "user_id": new_user.id}), 201
 
-
-# Endpoint para login
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -111,7 +106,6 @@ def login():
     db.session.commit()
 
     return jsonify({"message": f"Bem-vindo, {user.email}!", "user_id": user.id}), 200
-
 
 @app.route("/api/chat-assistant", methods=["POST"])
 def chat_assistant():
