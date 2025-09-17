@@ -14,6 +14,7 @@ from enum import Enum
 from Modules.FileServer.upload_ import upload_
 from Modules.FileServer.download_ import download_
 
+from Modules.Services.Geters.user_file_paths import get_user_file_paths
 
 # Configuração de logging
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ async def CustomerChatAgent(
         instructions=prompt_system,
         model=model,
         output_type=AI_CustomerChatOutput,
+        # tools=
     )
     
     # Execução do agente

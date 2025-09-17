@@ -2,6 +2,20 @@
 # Exclua arquivos compilados e caches
 __pycache__/
 *.pyc
+Back-End/Curriculo/
+Back-End/Reports/
+Back-End/Keys/
+Back-End/Db/
+
+Back-End/ai_studio_code.py
+Back-End/TecnicalDoc_RUN.py
+Back-End/Agents/TecnicalDoc/
+Back-End/TecnicalDoc_RUN.py
+Back-End/web_search.py
+Pipelines/
+Back-End/Tests/
+Docs/
+
 
 MemeContext.py
 run-server.py
