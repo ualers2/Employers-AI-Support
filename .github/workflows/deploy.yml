@@ -68,5 +68,5 @@ jobs:
         ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
           cd /home/administrator/deploys/employersai && \
           docker rm -f api_support_prod frontend_support_prod  || true && \
-          docker-compose up --build -d api_support_prod frontend_support_prod
+          docker-compose up --build -d api_support_prod frontend_support_prod postgres_1
         "
