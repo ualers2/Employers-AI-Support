@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "0.0.0.0", 
     port: 4343,
-    allowedHosts: ["localhost", "employers-ai.site"],
+    allowedHosts: ["localhost", "employers-ai.site", "www.employers-ai.site"],
     hmr: {
       protocol: 'wss',
       host: 'employers-ai.site', 
