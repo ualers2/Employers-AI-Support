@@ -33,12 +33,11 @@ from Modules.FileServer.delete_file import delete_file
 
 
 from Agents.ClientChat.ai import CustomerChatAgent
-from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Models.postgressSQL import db, AgentStatus, Ticket, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
 asgi_app = WsgiToAsgi(app)
-CORS(app, origins=["https://mediacutsstudio.com", "https://employers-ai-support.rshare.io", "https://ai-support-workers.rshare.io"])
+CORS(app, origins=["https://www.employers-ai.site", "https://employers-ai.site"])
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
