@@ -24,14 +24,17 @@ from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
 
 from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
+from Modules.Services.Resolvers.send_email import SendEmail
 
 from Modules.FileServer.upload_ import upload_
 from Modules.FileServer.download_ import download_
 from Modules.FileServer.delete_file import delete_file
 
-from ClientChat.ai import CustomerChatAgent
+
+
+from Agents.ClientChat.ai import CustomerChatAgent
 from Keys.Firebase.FirebaseApp import init_firebase
-from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
+from Modules.Models.postgressSQL import db, AgentStatus, Ticket, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
 asgi_app = WsgiToAsgi(app)
@@ -40,6 +43,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),'Keys', 'keys.env'))
 
 try:
@@ -59,7 +63,7 @@ if not os.path.exists(UPLOAD_FOLDER):
 METADATA_FILE_PATH = os.path.join(UPLOAD_FOLDER, 'alfred_files_metadata.json')
 last_alfred_heartbeat = datetime.now(timezone.utc)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@meu_postgres:5432/meubanco")
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -191,7 +195,6 @@ def chat_assistant():
             "error": "Internal server error",
             "message": "Ocorreu um erro interno. Nossa equipe foi notificada."
         }), 500
-    
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
@@ -299,6 +302,387 @@ def upload_alfred_file():
         logger.exception(f"Erro no upload do arquivo: {e}")
         return jsonify({"error": "Erro no servidor ao processar o upload."}), 500
 
+
+
+@app.route('/api/agents/metrics', methods=['GET'])
+def get_agent_metrics():
+    """
+    Endpoint para obter métricas dos agentes.
+    Retorna estatísticas sobre status dos agentes, atividade e performance.
+    """
+    try:
+        user_id_param = request.args.get('user_id')
+        if not user_id_param:
+            return jsonify({'error': 'user_id parameter is required'}), 400
+
+        user = resolve_user_identifier(user_id_param)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+
+        user_id = user.id
+
+        # Métricas básicas dos agentes
+        total_agents = AgentStatus.query.filter_by(user_id=user_id).count()
+        online_agents = AgentStatus.query.filter_by(user_id=user_id, status='online').count()
+        offline_agents = AgentStatus.query.filter_by(user_id=user_id, status='offline').count()
+        degraded_agents = AgentStatus.query.filter_by(user_id=user_id, status='degraded').count()
+
+        # Métricas de atividade (últimas 24 horas)
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        
+        # Respostas do Alfred nas últimas 24h
+        alfred_responses_24h = Message.query.filter(
+            Message.user_id == user_id,
+            Message.role == 'assistant',
+            Message.created_at >= yesterday
+        ).count()
+
+        # Respostas do Alfred no período anterior (24-48h atrás)
+        day_before_yesterday = yesterday - timedelta(days=1)
+        alfred_responses_previous = Message.query.filter(
+            Message.user_id == user_id,
+            Message.role == 'assistant',
+            Message.created_at >= day_before_yesterday,
+            Message.created_at < yesterday
+        ).count()
+
+        # Calcular mudança percentual
+        alfred_responses_change = 0
+        if alfred_responses_previous > 0:
+            alfred_responses_change = round(
+                ((alfred_responses_24h - alfred_responses_previous) / alfred_responses_previous) * 100, 1
+            )
+        elif alfred_responses_24h > 0:
+            alfred_responses_change = 100
+
+        # Tempo médio de resposta (simulado - você pode implementar uma lógica real)
+        avg_response_time = "1.2s"  # Placeholder
+
+        # Atividade por plataforma
+        platform_activity = db.session.query(
+            AgentStatus.platform,
+            func.count(Message.id).label('message_count')
+        ).outerjoin(
+            Message, Message.user_id == user_id
+        ).filter(
+            AgentStatus.user_id == user_id,
+            Message.created_at >= yesterday
+        ).group_by(AgentStatus.platform).all()
+
+        platform_stats = [
+            {
+                'platform': activity.platform,
+                'messageCount': activity.message_count or 0
+            }
+            for activity in platform_activity
+        ]
+
+        # Agentes mais ativos (baseado em última atualização)
+        most_active_agents = db.session.query(AgentStatus).filter_by(
+            user_id=user_id
+        ).order_by(desc(AgentStatus.last_update)).limit(5).all()
+
+        active_agents_list = [
+            {
+                'platform': agent.platform,
+                'status': agent.status,
+                'lastUpdate': agent.last_update.isoformat() if agent.last_update else None,
+                'containerName': agent.container_name,
+                'imageName': agent.image_name
+            }
+            for agent in most_active_agents
+        ]
+
+        # Estatísticas de uptime (simulado)
+        uptime_percentage = round((online_agents / total_agents * 100) if total_agents > 0 else 0, 1)
+
+        return jsonify({
+            'totalAgents': total_agents,
+            'onlineAgents': online_agents,
+            'offlineAgents': offline_agents,
+            'degradedAgents': degraded_agents,
+            'alfredResponses24h': alfred_responses_24h,
+            'alfredResponsesChangePercentage': alfred_responses_change,
+            'avgResponseTime': avg_response_time,
+            'uptimePercentage': uptime_percentage,
+            'platformStats': platform_stats,
+            'mostActiveAgents': active_agents_list
+        }), 200
+
+    except Exception as e:
+        print(f"Erro ao buscar métricas dos agentes: {e}")
+        return jsonify({
+            'error': 'Erro interno do servidor',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/agents/list', methods=['GET'])
+def get_agents_list():
+    """
+    Endpoint para obter lista detalhada dos agentes.
+    """
+    try:
+        user_id_param = request.args.get('user_id')
+        if not user_id_param:
+            return jsonify({'error': 'user_id parameter is required'}), 400
+
+        user = resolve_user_identifier(user_id_param)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+
+        user_id = user.id
+
+        agents = AgentStatus.query.filter_by(user_id=user_id).all()
+
+        agents_list = []
+        for agent in agents:
+            agent_data = {
+                'id': agent.id,
+                'platform': agent.platform,
+                'status': agent.status,
+                'lastUpdate': agent.last_update.isoformat() if agent.last_update else None,
+                'containerName': agent.container_name,
+                'imageName': agent.image_name,
+                'name': agent.name,  
+                'area': agent.area,  
+                'photoID': agent.photoID,  
+                'workingHours': agent.workingHours, 
+                'tasks': agent.tasks
+            }
+            agents_list.append(agent_data)
+
+        return jsonify({
+            'agents': agents_list,
+            'total': len(agents_list)
+        }), 200
+
+    except Exception as e:
+        print(f"Erro ao buscar lista de agentes: {e}")
+        return jsonify({
+            'error': 'Erro interno do servidor',
+            'details': str(e)
+        }), 500
+
+
+
+@app.route('/api/tickets/metrics', methods=['GET'])
+def get_ticket_metrics():
+    """
+    Retorna métricas dos tickets: abertos, fechados, escalados,
+    incluindo mudança percentual em relação ao período anterior.
+    """
+    try:
+        user_id = request.args.get("user_id")
+        period_days = int(request.args.get("days", 7))  # período padrão 7 dias
+
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        user_number = user.id
+
+        # Datas
+        now = datetime.utcnow()
+        current_start = now - timedelta(days=period_days)
+        previous_start = current_start - timedelta(days=period_days)
+        previous_end = current_start
+
+        # Contagem atual
+        tickets_open_current = Ticket.query.filter(
+            Ticket.user_id == user_number,
+            Ticket.status == "open",
+            Ticket.timestamp_open >= current_start
+        ).count()
+
+        tickets_closed_current = Ticket.query.filter(
+            Ticket.user_id == user_number,
+            Ticket.status == "closed",
+            Ticket.timestamp_close >= current_start
+        ).count()
+
+        tickets_escalated_current = Ticket.query.filter(
+            Ticket.user_id == user_number,
+            Ticket.status == "escalated",
+            Ticket.timestamp_escalated >= current_start
+        ).count()
+
+        # Contagem período anterior
+        tickets_open_previous = Ticket.query.filter(
+            Ticket.user_id == user_number,
+            Ticket.status == "open",
+            Ticket.timestamp_open >= previous_start,
+            Ticket.timestamp_open < previous_end
+        ).count()
+
+        tickets_closed_previous = Ticket.query.filter(
+            Ticket.user_id == user_number,
+            Ticket.status == "closed",
+            Ticket.timestamp_close >= previous_start,
+            Ticket.timestamp_close < previous_end
+        ).count()
+
+        tickets_escalated_previous = Ticket.query.filter(
+            Ticket.user_id == user_number,
+            Ticket.status == "escalated",
+            Ticket.timestamp_escalated >= previous_start,
+            Ticket.timestamp_escalated < previous_end
+        ).count()
+
+        # Função auxiliar para calcular mudança percentual
+        def calc_change(current, previous):
+            if previous == 0:
+                return 100 if current > 0 else 0
+            return round(((current - previous) / previous) * 100, 2)
+
+        metrics = {
+            "ticketsOpen": tickets_open_current,
+            "ticketsClosed": tickets_closed_current,
+            "ticketsEscalated": tickets_escalated_current,
+            "totalTickets": tickets_open_current + tickets_closed_current + tickets_escalated_current,
+            "ticketsOpenChangePercentage": calc_change(tickets_open_current, tickets_open_previous),
+            "ticketsClosedChangePercentage": calc_change(tickets_closed_current, tickets_closed_previous),
+            "ticketsEscalatedChangePercentage": calc_change(tickets_escalated_current, tickets_escalated_previous)
+        }
+
+        return jsonify(metrics), 200
+
+    except Exception as e:
+        logger.error(f"Error getting ticket metrics: {e}", exc_info=True)
+        return jsonify({"error": "Erro no servidor ao buscar métricas de tickets."}), 500
+
+@app.route('/api/tickets', methods=['GET'])
+def list_tickets():
+    """
+    Lista os tickets com paginação e filtros
+    """
+    try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "user_id é obrigatório."}), 400
+
+        user = resolve_user_identifier(user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado."}), 404
+        
+        user_id = user.id
+        user_email = user.email
+        
+        limit = request.args.get('limit', default=20, type=int)
+        offset = request.args.get('offset', default=0, type=int)
+        status_filter = request.args.get('status')
+        
+        query = Ticket.query.filter_by(user_id=user_id)
+
+        if status_filter and status_filter in ['open', 'closed', 'escalated']:
+            query = query.filter_by(status=status_filter)
+        
+        query = query.order_by(Ticket.timestamp_open.desc())
+        total_tickets = query.count()
+        tickets = query.offset(offset).limit(limit).all()
+        
+        formatted_tickets = []
+        for ticket in tickets:
+            formatted_tickets.append({
+                "id": ticket.id,
+                "ticketId": ticket.ticketid,
+                "userEmail": user_email,
+                "issueDescription": ticket.issue_description,
+                "status": ticket.status,
+                "csat": ticket.csat,
+                "timestampOpen": ticket.timestamp_open.isoformat() if ticket.timestamp_open else None,
+                "timestampClose": ticket.timestamp_close.isoformat() if ticket.timestamp_close else None,
+                "timestampEscalated": ticket.timestamp_escalated.isoformat() if ticket.timestamp_escalated else None,
+                "escalationReason": ticket.escalation_reason,
+                "notes": ticket.notes or []
+            })
+        
+        return jsonify({
+            "tickets": formatted_tickets,
+            "total": total_tickets,
+            "limit": limit,
+            "offset": offset
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error listing tickets: {e}", exc_info=True)
+        return jsonify({"error": "Erro no servidor ao buscar tickets."}), 500
+
+@app.route('/api/tickets/reopen/<int:ticket_id>', methods=['POST'])
+def reopen_ticket(ticket_id):
+    try:
+        ticket = Ticket.query.get(ticket_id)
+        if not ticket:
+            return jsonify({"error": "Ticket não encontrado"}), 404
+
+        if ticket.status != "closed":
+            return jsonify({"error": "Só é possível reabrir tickets fechados"}), 400
+
+        ticket.status = "open"
+        ticket.timestamp_close = None  # remove o fechamento
+        db.session.commit()
+
+        return jsonify({"message": f"Ticket {ticket.ticketid} reaberto com sucesso"}), 200
+
+    except Exception as e:
+        logger.error(f"Erro ao reabrir ticket: {e}", exc_info=True)
+        return jsonify({"error": "Erro ao reabrir o ticket"}), 500
+
+@app.route('/api/tickets/close/<int:ticket_id>', methods=['POST'])
+def close_ticket(ticket_id):
+    try:
+        ticket = Ticket.query.get(ticket_id)
+        if not ticket:
+            return jsonify({"error": "Ticket não encontrado"}), 404
+
+        ticket.status = "closed"
+        ticket.timestamp_close = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({"message": f"Ticket {ticket.ticketid} fechado com sucesso"}), 200
+
+    except Exception as e:
+        logger.error(f"Erro ao fechar ticket: {e}", exc_info=True)
+        return jsonify({"error": "Erro ao fechar o ticket"}), 500
+
+
+@app.route('/api/tickets/send-email/<int:ticket_id>', methods=['POST'])
+def send_ticket_email(ticket_id):
+    try:
+        data = request.get_json()
+        message = data.get("message")  # mensagem vinda do frontend
+
+        if not message:
+            return jsonify({"error": "Mensagem não fornecida"}), 400
+
+        ticket = Ticket.query.get(ticket_id)
+        if not ticket:
+            return jsonify({"error": "Ticket não encontrado"}), 404
+        
+        user = User.query.get(ticket.user_id)
+        if not user:
+            return jsonify({"error": "Usuário não encontrado"}), 404
+
+        # Chamada para função de envio de email
+        SendEmail(
+            appname="Employers AI",
+            Subject=F"Ticket #{ticket_id}",
+            user_email_origin=user.email,
+            body=message,
+            SMTP_ADM=os.getenv("SMTP_USER"),
+            SMTP_PASSWORD=os.getenv("SMTP_PASSWORD"),
+            SMTP_HOST=os.getenv("SMTP_HOST"),
+            SMTP_PORT=int(os.getenv("SMTP_PORT", 587)),
+            use_tls=os.getenv("SMTP_USE_TLS", "true").lower() == "true",
+        )
+
+        return jsonify({"message": f"Email enviado para {user.email}"}), 200
+
+    except Exception as e:
+        logger.error(f"Erro ao enviar email do ticket: {e}", exc_info=True)
+        return jsonify({"error": "Erro ao enviar email"}), 500
 
 @app.route('/api/alfred-files', methods=['GET'])
 def list_alfred_files():
@@ -679,6 +1063,8 @@ def list_recent_messages():
         return jsonify({"error": "Usuário não encontrado."}), 404
     
     numeric_user_id = user.id
+    user_email = user.email
+    created_at = user.created_at.isoformat()
 
     limit = request.args.get('limit', default=10, type=int)
 
@@ -699,8 +1085,8 @@ def list_recent_messages():
         user_obj = last_message.user
         interactions.append({
             "id": row.session_id,
-            "user": user_obj.email if user_obj else "Unknown User",
-            "userId": user_obj.id if user_obj else None,
+            "user": f"User: {user_email}",
+            "userId": f"",
             "message": last_message.content,
             "timestamp": last_message.created_at.isoformat(),
             "status": "responded"
@@ -1193,6 +1579,10 @@ def get_alfred_status():
             "message": "Erro interno do servidor ao verificar o status do Alfred."
         }), 500
 
+
+
+
+
 @app.route('/api/agents/initialize', methods=['POST'], strict_slashes=False)
 def initialize_agent():
     """
@@ -1260,6 +1650,7 @@ def initialize_agent():
             volumes={
                 "alfred_knowledge_data": {"bind": "/app/Knowledge", "mode": "rw"},
                 "logger_data": {"bind": "/app/Logs", "mode": "rw"},
+                "data_filedb": {"bind": "/app/Db", "mode": "rw"},
             },
             network="rede_externa",
             mem_limit="500m",
@@ -1282,21 +1673,6 @@ def initialize_agent():
     except Exception as e:
         return jsonify({"message": f"Erro ao inicializar agente {platform}/{user_id}: {e}"}), 500
     
-
-VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
-
-def _get_container_name(platform: str, user_id: str) -> str:
-    return f"alfred-{platform}-{user_id}-agent"
-
-def _get_image_and_command(platform: str):
-    if platform == "telegram":
-        return "telegram-server-dev:latest", "sh -c 'python Telegram.py'"
-    if platform == "discord":
-        return "discord-server-dev:latest", "sh -c 'python Discord.py'"
-    if platform == "whatsapp":
-        return "whatsapp-server-dev:latest", "sh -c 'ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'"
-    raise ValueError("Platform inválida")
-
 @app.route('/api/agents/<platform>/reset', methods=['POST'])
 def reset_agent(platform):
     data = request.get_json(silent=True) or {}
@@ -1307,7 +1683,13 @@ def reset_agent(platform):
     if not user_id:
         return jsonify({"message": "user_id é obrigatório (no body JSON ou query param)."}), 400
 
-    container_name = _get_container_name(platform, str(user_id))
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+
+    container_name = _get_container_name(platform, str(numeric_user_id))
     try:
         # se existir, parar e remover
         try:
@@ -1360,7 +1742,12 @@ def pause_agent(platform):
     if not user_id:
         return jsonify({"message": "user_id é obrigatório (no body JSON ou query param)."}), 400
 
-    container_name = _get_container_name(platform, str(user_id))
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+    container_name = _get_container_name(platform, str(numeric_user_id))
 
     try:
         container = client.containers.get(container_name)
@@ -1390,7 +1777,12 @@ def delete_agent(platform):
     if not user_id:
         return jsonify({"message": "user_id é obrigatório (no body JSON ou query param)."}), 400
 
-    container_name = _get_container_name(platform, str(user_id))
+    user = resolve_user_identifier(user_id)
+    if not user:
+        return jsonify({"error": "Usuário não encontrado."}), 404
+    
+    numeric_user_id = user.id
+    container_name = _get_container_name(platform, str(numeric_user_id))
 
     try:
         try:
@@ -1439,6 +1831,21 @@ def trocar_code_por_token(code):
     return resp.json()
 
 
+
+
+VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
+
+def _get_container_name(platform: str, user_id: str) -> str:
+    return f"alfred-{platform}-{user_id}-agent"
+
+def _get_image_and_command(platform: str):
+    if platform == "telegram":
+        return "telegram-server-dev:latest", "sh -c 'python Telegram.py'"
+    if platform == "discord":
+        return "discord-server-dev:latest", "sh -c 'python Discord.py'"
+    if platform == "whatsapp":
+        return "whatsapp-server-dev:latest", "sh -c 'ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'"
+    raise ValueError("Platform inválida")
 
 def _enrich_user_context(user_context: Dict[str, Any], request_obj) -> Dict[str, Any]:
     """Enriquece o contexto do usuário com informações da requisição"""

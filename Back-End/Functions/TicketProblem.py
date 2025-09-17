@@ -1,8 +1,13 @@
+# Back-End\Functions\TicketProblem.py
 import hashlib
-from firebase_admin import credentials, db
 from typing_extensions import TypedDict, Literal
 from agents import function_tool
 from datetime import datetime
+
+
+from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
+from Modules.Models.postgressSQL import db, Ticket
+from api import app
 
 class GetTicketDetailsParams(TypedDict, total=False):
     ticketid: str
@@ -65,22 +70,22 @@ def OpenSupportTicketProblem(params: OpenTicketParams):
     Returns:
         str: A message confirming the ticket opening and its ID, e.g., "Open Ticket ID: abcde".
     """
-    user_email = params.get('user_email')
-    issue_description = params.get('issue_description')
+    user_email = params.get("user_email")
+    issue_description = params.get("issue_description")
+    ticketid = hashlib.sha256(issue_description.encode("utf-8")).hexdigest()[:5]
+    with app.app_context():
+        user = resolve_user_identifier(user_email)
+        if not user:
+            return f"Usuário {user_email} não encontrado."
 
-    full_hash = hashlib.sha256(issue_description.encode('utf-8')).hexdigest()
-    ticketid = full_hash[:5]
-    ref = db.reference('support_ticket', app=appfb)
-    ticketdatasetkey = ticketid
-    ticketdataset = {
-        'user_email': user_email,
-        'issue_description': issue_description,
-        'timestamp_open': datetime.now().isoformat(),
-        'status': "open",
-        'ticketid': ticketid,
-        'csat': "None"  # Inicialmente sem feedback
-    }
-    ref.child(ticketdatasetkey).set(ticketdataset)
+        ticket = Ticket(
+            ticketid=ticketid,
+            user_id=user.id,
+            issue_description=issue_description,
+        )
+        db.session.add(ticket)
+        db.session.commit()
+
     return f"Open Ticket ID: {ticketid}"
 
 @function_tool
@@ -95,17 +100,16 @@ def CloseSupportTicketProblem(params: CloseTicketParams):
     Returns:
         str: A confirmation message, e.g., "Closed Ticket ID: abcde", or an error if the ticket is not found.
     """
-    ticketid = params.get('ticketid') # Corrected from issue_description
+    ticketid = params.get("ticketid")
+    with app.app_context():
+        ticket = Ticket.query.filter_by(ticketid=ticketid).first()
 
-    ref = db.reference(f'support_ticket/{ticketid}', app=appfb)
-    data = ref.get()
-    
-    if not data:
-        return f"Ticket ID {ticketid} not found."
+        if not ticket:
+            return f"Ticket ID {ticketid} not found."
 
-    data['timestamp_close'] = datetime.now().isoformat()
-    data['status'] = "closed"
-    ref.set(data)
+        ticket.status = "closed"
+        ticket.timestamp_close = datetime.utcnow()
+        db.session.commit()
     return f"Closed Ticket ID: {ticketid}"
 
 @function_tool
@@ -122,20 +126,16 @@ def RecordCSAT(params: RecordCSATParams):
         str: A confirmation message, e.g., "CSAT registrado para o Ticket ID: abcde",
              or an error if the ticket is not found.
     """
-    ticketid = params.get('ticketid')
-    csat_score = params.get('csat_score')
+    ticketid = params.get("ticketid")
+    csat_score = params.get("csat_score")
+    with app.app_context():
+        ticket = Ticket.query.filter_by(ticketid=ticketid).first()
+        if not ticket:
+            return f"Ticket ID {ticketid} not found."
 
-    ref = db.reference(f'support_ticket/{ticketid}', app=appfb)
-    data = ref.get()
-
-    if not data:
-        return f"Ticket ID {ticketid} not found."
-
-    data['csat'] = csat_score
-    ref.set(data)
+        ticket.csat = csat_score
+        db.session.commit()
     return f"CSAT registrado para o Ticket ID: {ticketid}"
-
-
 
 @function_tool
 def GetTicketDetails(params: GetTicketDetailsParams):
@@ -150,15 +150,25 @@ def GetTicketDetails(params: GetTicketDetailsParams):
         dict or str: A dictionary containing all ticket data if found,
                      or a string error message if the ticket is not found.
     """
-    ticketid = params.get('ticketid')
+    ticketid = params.get("ticketid")
+    with app.app_context():
+        ticket = Ticket.query.filter_by(ticketid=ticketid).first()
 
-    ref = db.reference(f'support_ticket/{ticketid}', app=appfb)
-    data = ref.get()
+        if not ticket:
+            return f"Ticket ID {ticketid} not found."
 
-    if not data:
-        return f"Ticket ID {ticketid} not found."
-    
-    return data # Retorna todos os detalhes do ticket
+        return {
+            "ticketid": ticket.ticketid,
+            "user_email": ticket.user_email,
+            "issue_description": ticket.issue_description,
+            "status": ticket.status,
+            "csat": ticket.csat,
+            "notes": ticket.notes,
+            "timestamp_open": ticket.timestamp_open.isoformat(),
+            "timestamp_close": ticket.timestamp_close.isoformat() if ticket.timestamp_close else None,
+            "timestamp_escalated": ticket.timestamp_escalated.isoformat() if ticket.timestamp_escalated else None,
+            "escalation_reason": ticket.escalation_reason,
+        }
 
 @function_tool
 def EscalateTicket(params: EscalateTicketParams):
@@ -175,22 +185,17 @@ def EscalateTicket(params: EscalateTicketParams):
         str: A confirmation message, e.g., "Ticket ID abcde has been escalated for the following reason: ...",
              or an error if the ticket is not found.
     """
-    ticketid = params.get('ticketid')
-    reason = params.get('reason')
+    ticketid = params.get("ticketid")
+    reason = params.get("reason")
+    with app.app_context():
+        ticket = Ticket.query.filter_by(ticketid=ticketid).first()
+        if not ticket:
+            return f"Ticket ID {ticketid} not found."
 
-    ref = db.reference(f'support_ticket/{ticketid}', app=appfb)
-    data = ref.get()
-
-    if not data:
-        return f"Ticket ID {ticketid} not found."
-
-    data['status'] = "escalated"
-    data['escalation_reason'] = reason
-    data['timestamp_escalated'] = datetime.now().isoformat()
-    ref.set(data)
-    
-    # Aqui você poderia integrar com um sistema de notificação
-    # Ex: send_email_to_support_team(ticketid, reason)
+        ticket.status = "escalated"
+        ticket.escalation_reason = reason
+        ticket.timestamp_escalated = datetime.utcnow()
+        db.session.commit()
 
     return f"Ticket ID {ticketid} has been escalated for the following reason: {reason}."
 
@@ -209,24 +214,22 @@ def AddTicketNote(params: AddTicketNoteParams):
         str: A confirmation message, e.g., "Note added to Ticket ID: abcde.",
              or an error if the ticket is not found.
     """
-    ticketid = params.get('ticketid')
-    note_content = params.get('note_content')
+    ticketid = params.get("ticketid")
+    note_content = params.get("note_content")
+    with app.app_context():
+        ticket = Ticket.query.filter_by(ticketid=ticketid).first()
+        if not ticket:
+            return f"Ticket ID {ticketid} not found."
 
-    ref = db.reference(f'support_ticket/{ticketid}', app=appfb)
-    data = ref.get()
+        notes = ticket.notes or []
+        notes.append({"timestamp": datetime.utcnow().isoformat(), "content": note_content})
+        ticket.notes = notes
+        db.session.commit()
 
-    if not data:
-        return f"Ticket ID {ticketid} not found."
-
-    if 'notes' not in data:
-        data['notes'] = []
-    
-    data['notes'].append({
-        'timestamp': datetime.now().isoformat(),
-        'content': note_content
-    })
-    ref.set(data)
     return f"Note added to Ticket ID: {ticketid}."
+
+
+
 
 @function_tool
 def GetUserInfo(params: GetUserInfoParams):

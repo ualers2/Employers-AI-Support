@@ -3,6 +3,7 @@
 from telegram import Bot
 from dotenv import load_dotenv
 import threading
+import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import os
@@ -10,16 +11,13 @@ import os
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),  'Keys', 'keys.env'))
 os.chdir(os.path.join(os.path.dirname(__file__)))
-import firebase_admin
-# from firebase_admin import db
-from datetime import datetime, timedelta, timezone
 
 
-from AssistantSupport.ai import Alfred
+from Agents.AssistantSupport.ai import Alfred
 from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Loggers.logger import setup_logger 
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
-from api import app
+# from api import app
 
 
 from Modules.Services.Geters.user_info import _get_user_info
@@ -51,7 +49,7 @@ class Telegram:
         Alfredclass = Alfred()
         self.Alfred = Alfredclass.Alfred
                 
-        self.log = setup_logger("Telegram", "Telegram.log")
+        self.log = setup_logger("Telegram", "Telegram.log", logging.DEBUG)
 
         BASE_DIR = os.path.abspath(os.path.dirname(__file__))
         UPLOAD_FOLDER = os.path.join(BASE_DIR, 'Knowledge')
@@ -66,16 +64,17 @@ class Telegram:
         telegram_message = update.message
         chat_id = str(telegram_message.chat.id)
 
-        user_info = _get_user_info(telegram_message.from_user, chat_id, telegram_user=telegram_message, category="Telegram")
+        user_info = _get_user_info(telegram_message.from_user, chat_id, telegram_user=telegram_message.from_user, category="Telegram")
         
         user_text = telegram_message.text
 
 
+        self.log.info(f"chat_id {chat_id}")
         _update_interaction_status_postgres(chat_id, "pending")
 
         _save_message_to_postgres(self.user_platform_id, chat_id, "user", user_text, user_info)
 
-        Alfred_response = await self.Alfred(user_text, self.user_platform_id)
+        Alfred_response = await self.Alfred(user_text, self.user_platform_id, chat_id, "telegram")
 
         # if Deletemessage:
         #     try:
@@ -94,21 +93,23 @@ class Telegram:
 
     async def handle_channel_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Lida com mensagens enviadas para um canal específico."""
+        self.CHANNEL_ID = int(self.CHANNEL_ID)
+
         if update.message.chat_id == self.CHANNEL_ID:
             user_message = update.message.text
             user_id = update.message.from_user.id  
             telegram_message = update.message
             chat_id = str(telegram_message.chat.id)
 
-            user_info = _get_user_info(telegram_message.from_user, chat_id, telegram_user=telegram_message, category="Telegram")
+            user_info = _get_user_info(telegram_message.from_user, chat_id, telegram_user=telegram_message.from_user, category="Telegram")
             user_text = telegram_message.text
 
-        
+            self.log.info(f"chat_id {chat_id}")
             _update_interaction_status_postgres(chat_id, "pending")
 
             _save_message_to_postgres(self.user_platform_id, chat_id, "user", user_text, user_info)
 
-            Alfred_response = await self.Alfred(user_text, self.user_platform_id)
+            Alfred_response = await self.Alfred(user_text, self.user_platform_id, chat_id, "telegram")
 
             # if Deletemessage:
             #     try:
@@ -161,13 +162,16 @@ class Telegram:
     def main_telegram(self):
         self.log.info("inicialized")
         self.support_telegram.add_handler(CommandHandler("start", self.start))
-        self.support_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.reply_message))
         self.support_telegram.add_handler(MessageHandler(filters.TEXT & filters.Chat(self.CHANNEL_ID), self.handle_channel_message))
+        self.support_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.reply_message))
+
         self.support_telegram.run_polling()
 
 
 
 if __name__ == '__main__':
+    # load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),'Keys', 'keys.env'))
+
     user_platform_id = os.getenv("USER_ID") 
     TOKEN = os.getenv("botToken") 
     CHANNEL_ID =  os.getenv("channelId") 

@@ -5,6 +5,8 @@ Back-End/Keys/Firebase/FirebaseApp.py
 Back-End/Keys/
 Back-End/Logs/
 Back-End/Tests/
+Back-End/Reports/
+Back-End/AIJobAutomation.py
 Pipelines/PullRequest/Internalserver/keys.env
 Pipelines/PullRequest/Internalserver/Dev/
 Pipelines/PullRequest/Internalserver/Keys/

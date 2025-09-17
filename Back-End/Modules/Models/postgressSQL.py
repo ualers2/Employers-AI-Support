@@ -4,7 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import uuid
 from sqlalchemy import Column, DateTime
-
+from sqlalchemy.types import JSON
 
 db = SQLAlchemy()
 
@@ -33,11 +33,31 @@ class User(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+    
+class Ticket(db.Model):
+    __tablename__ = "tickets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ticketid = db.Column(db.String(20), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    issue_description = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(50), default="open")  # open, closed, escalated
+    csat = db.Column(db.String(50), default="None")
+    notes = db.Column(db.JSON, default=list)
+    timestamp_open = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp_close = db.Column(db.DateTime, nullable=True)
+    timestamp_escalated = db.Column(db.DateTime, nullable=True)
+    escalation_reason = db.Column(db.Text, nullable=True)
 
 class AgentStatus(db.Model):
     __tablename__ = "agent_status"
 
     id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    area = db.Column(db.String(200), nullable=False)
+    tasks = db.Column(JSON, nullable=False)
+    photoID = db.Column(db.String(200), nullable=True)
+    workingHours = db.Column(db.String(200), nullable=True)
     platform = db.Column(db.String(50), nullable=False)  # Removed unique=True for user-specific agents
     status = db.Column(db.String(50), nullable=False, default="offline")  # 'online', 'offline', 'degraded'
     last_update = db.Column(db.DateTime(timezone=True), nullable=True)

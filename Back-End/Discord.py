@@ -7,7 +7,7 @@ from dotenv import load_dotenv, find_dotenv
 import threading
 from datetime import datetime, timedelta, timezone
 
-from AssistantSupport.ai import Alfred
+from Agents.AssistantSupport.ai import Alfred
 from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Loggers.logger import setup_logger 
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
@@ -73,7 +73,7 @@ class Discord:
 
             _save_message_to_postgres(self.user_platform_id, chat_id, "user", discord_message, user_info)
 
-            Alfred_response = await self.Alfred(discord_message, self.user_platform_id)
+            Alfred_response = await self.Alfred(discord_message, self.user_platform_id, chat_id, "discord")
 
             # if Deletemessage:
             #     try:

@@ -12,13 +12,17 @@ import {
     Activity,
     Settings,
     Bot,
+    Ticket,  // Adicionar esta linha
+
     GitFork // Adicionado GitFork para consistência, se necessário no futuro
 } from "lucide-react";
 import MessagePanel from "@/components/MessagePanel";
 import FileManager from "@/components/FileManager";
 import ActivityMonitor from "@/components/ActivityMonitor";
 import ConfigPanel from "@/components/ConfigPanel";
-import AlfredControlPanel from "@/components/AlfredControlPanel"; // Importe o novo componente
+import AlfredControlPanel from "@/components/AlfredControlPanel"; 
+import TicketMetrics from "@/components/TicketMetrics"; 
+import AgentMetrics from "@/components/AgentMetrics";
 
 const Index = () => {
     const [stats, setStats] = useState({
@@ -192,8 +196,19 @@ const Index = () => {
                 {/* Main Dashboard */}
                 <Card className="shadow-lg">
                     <CardContent className="p-6">
-                        <Tabs defaultValue="messages" className="w-full">
-                            <TabsList className="grid w-full grid-cols-5"> {/* Alterado para 5 colunas */}
+                        <Tabs defaultValue="agents" className="w-full">
+                            <TabsList className="grid w-full grid-cols-7"> {/* Alterado para 7 colunas */}
+
+                                <TabsTrigger value="agents" className="flex items-center gap-2">
+                                    <Users className="w-4 h-4" />
+                                    Agentes
+                                </TabsTrigger>
+
+                                <TabsTrigger value="tickets" className="flex items-center gap-2">
+                                    <Ticket className="w-4 h-4" />
+                                    Tickets
+                                </TabsTrigger>
+
                                 <TabsTrigger value="messages" className="flex items-center gap-2">
                                     <MessageCircle className="w-4 h-4" />
                                     Mensagens
@@ -202,7 +217,7 @@ const Index = () => {
                                     <Upload className="w-4 h-4" />
                                     Arquivos Alfred
                                 </TabsTrigger>
-                                {/* Nova aba para o AlfredControlPanel */}
+                       
                                 <TabsTrigger value="alfred-control" className="flex items-center gap-2">
                                     <Bot className="w-4 h-4" />
                                     Controle Alfred
@@ -217,6 +232,12 @@ const Index = () => {
                                 </TabsTrigger>
                             </TabsList>
 
+                            <TabsContent value="agents" className="mt-6">
+                                <AgentMetrics />
+                            </TabsContent>
+                            <TabsContent value="tickets" className="mt-6">
+                                <TicketMetrics />
+                            </TabsContent>
                             <TabsContent value="messages" className="mt-6">
                                 <MessagePanel />
                             </TabsContent>
@@ -225,7 +246,6 @@ const Index = () => {
                                 <FileManager />
                             </TabsContent>
 
-                            {/* Conteúdo para o AlfredControlPanel */}
                             <TabsContent value="alfred-control" className="mt-6">
                                 <AlfredControlPanel API_BASE_URL={API_BASE_URL} />
                             </TabsContent>
