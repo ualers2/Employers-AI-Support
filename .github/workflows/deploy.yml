@@ -29,7 +29,7 @@ jobs:
         ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
         chmod 644 ~/.ssh/known_hosts
         echo "known_hosts:"
-        cat ~/.ssh/known_hosts
+        cat ~/.ssh/known_hosts 
 
     - name: Copy entire project to VPS
       run: |
@@ -66,7 +66,6 @@ jobs:
           printf '%s' '${{ secrets.COMPOSE }}' > /home/administrator/deploys/employersai/docker-compose.yml
         "
 
-    # 6️⃣ Buildar e subir containers na VPS
     - name: Deploy Docker Compose
       run: |
         ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
