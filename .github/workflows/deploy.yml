@@ -67,7 +67,6 @@ jobs:
       run: |
         ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
           cd /home/administrator/deploys/employersai && \
-          docker-compose down -v --remove-orphans || true && \
           docker rm -f api_support_prod frontend_support_prod  || true && \
           docker-compose up -d --build
         "
