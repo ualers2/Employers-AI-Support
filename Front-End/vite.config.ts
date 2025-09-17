@@ -8,10 +8,10 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "0.0.0.0", 
     port: 4343,
-    allowedHosts: ["localhost", "www.employers-ai.site", "employers-ai.site"],
+    allowedHosts: ["localhost", "employers-ai.site"],
     hmr: {
       protocol: 'wss',
-      host: 'www.employers-ai.site', 
+      host: 'employers-ai.site', 
     },
     watch: {
       ignored: ['**/node_modules/**'],
