@@ -31,20 +31,19 @@ jobs:
         echo "known_hosts:"
         cat ~/.ssh/known_hosts 
 
-    - name: Make dir on VPS
-      run: |
-        ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-          mkdir -p /home/administrator/deploys/employersai/Back-End/Keys && \
-          mkdir -p /home/administrator/deploys/employersai/Front-End
-        "
-
-
     - name: Copy entire project to VPS
       run: |
         rsync -avz --delete ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/home/administrator/deploys/employersai \
           --exclude node_modules \
           --exclude .git \
           --exclude front-end/node_modules
+
+    - name: Make dir on VPS
+      run: |
+        ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+          mkdir -p /home/administrator/deploys/employersai/Back-End/Keys && \
+          mkdir -p /home/administrator/deploys/employersai/Front-End
+        "
 
     - name: Create Firebase.json on VPS
       run: |
@@ -67,7 +66,6 @@ jobs:
     - name: Create COMPOSE on VPS
       run: |
         ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-          mkdir -p /home/administrator/deploys/employersai && \
           printf '%s' '${{ secrets.COMPOSE }}' > /home/administrator/deploys/employersai/docker-compose.yml
         "
 
