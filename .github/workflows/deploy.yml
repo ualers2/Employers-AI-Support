@@ -45,11 +45,6 @@ jobs:
           mkdir -p /home/administrator/deploys/employersai/Front-End
         "
 
-    - name: Create Firebase.json on VPS
-      run: |
-        ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-          echo '${{ secrets.FIREBASE_KEYS }}' | base64 --decode > /home/administrator/deploys/employersai/Back-End/Keys/Firebase.json
-        "
 
     - name: Create keys.env on VPS
       run: |

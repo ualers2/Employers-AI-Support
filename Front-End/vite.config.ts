@@ -8,10 +8,10 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "0.0.0.0", 
     port: 4343,
-    allowedHosts: ["localhost", "host.docker.internal", "www.support.mediacutsstudio.com"],
+    allowedHosts: ["localhost", "www.employers-ai.site", "employers-ai.site"],
     hmr: {
       protocol: 'wss',
-      host: 'host.docker.internal', 
+      host: 'www.employers-ai.site', 
     },
     watch: {
       ignored: ['**/node_modules/**'],
