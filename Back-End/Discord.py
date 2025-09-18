@@ -7,12 +7,8 @@ from dotenv import load_dotenv, find_dotenv
 import threading
 from datetime import datetime, timedelta, timezone
 
-from Agents.AssistantSupport.ai import Alfred
-from Keys.Firebase.FirebaseApp import init_firebase
-from Modules.Loggers.logger import setup_logger 
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 from api import app
-
 
 from Modules.Services.Geters.user_info import _get_user_info
 from Modules.Services.Savers.message import _save_message_to_postgres
@@ -20,6 +16,10 @@ from Modules.Services.Seters.status_online import set_status_online
 from Modules.Services.Updaters.user_interaction import _update_interaction_status_postgres
 from Modules.Services.Updaters.social_uptimer import start_uptime_updater
 from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
+from Modules.Loggers.logger import setup_logger 
+
+from Agents.AssistantSupport.ai import Alfred as alfredai
+
 
 class Discord:
     """
@@ -28,7 +28,7 @@ class Discord:
 
     - os agentes softwareai podem dar suporte a perguntas de usuarios e enviar imagens ao canal
     """
-    def __init__(self, CHANNEL_ID, discord_token, user_platform_id):
+    def __init__(self, CHANNEL_ID, discord_token, user_platform_id, app):
         self.intents = discord.Intents.default()
         self.intents.message_content = True 
         self.client_Discord = commands.Bot(command_prefix="!", intents=self.intents)
@@ -38,8 +38,9 @@ class Discord:
         self.user_platform_id = user_platform_id
         set_status_online(self.user_platform_id, category="Discord")
         start_uptime_updater(self.user_platform_id, category="Discord")
-        Alfredclass = Alfred()
+        Alfredclass = alfredai(app)
         self.Alfred = Alfredclass.Alfred
+                
 
         self.log = setup_logger("Discord", "Discord.log")
 
@@ -73,7 +74,7 @@ class Discord:
 
             _save_message_to_postgres(self.user_platform_id, chat_id, "user", discord_message, user_info)
 
-            Alfred_response = await self.Alfred(discord_message, self.user_platform_id, chat_id, "discord")
+            Alfred_response =  self.Alfred(discord_message, self.user_platform_id, chat_id, "discord")
 
             # if Deletemessage:
             #     try:
@@ -123,5 +124,5 @@ if __name__ == '__main__':
     user_platform_id = os.getenv("USER_ID")
     CHANNEL_ID = os.getenv("discordChannelId")
     discord_token = os.getenv("discordBotToken")
-    Discord_instance = Discord(CHANNEL_ID, discord_token, user_platform_id)
+    Discord_instance = Discord(CHANNEL_ID, discord_token, user_platform_id, app)
     Discord_instance.main_discord()
