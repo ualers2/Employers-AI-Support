@@ -9,10 +9,10 @@ import logging
 from datetime import datetime  # 🔹 para registrar o last_update
 from sqlalchemy.exc import IntegrityError
 
-from api import app
+# from api import app
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 from Modules.FileServer.download_ import download_
-from Functions.TicketProblem import *
+from Modules.Functions.TicketProblem import *
 
 from Modules.Services.Geters.user_file_paths import get_user_file_paths
 
@@ -28,11 +28,11 @@ class Alfred:
     o agente pode ser inferido pelo usuario via `telegram` e `discord` e `WhatsApp`
 
     """
-    def __init__(self):
+    def __init__(self, app):
         self.logger = logging.getLogger(__name__)
         if not self.logger.handlers:
             logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-       
+        self.app = app
         self.nameAlfred = "Alfred"
         self.model_selectAlfred = "gpt-5-nano"
         self.adxitional_instructions_Alfred = ""
@@ -49,9 +49,9 @@ class Alfred:
         self.USER_ID_FOR_TEST = os.getenv("USER_ID_FOR_TEST")
         self.AGENT_PLATFORM = "alfred" 
 
-    async def Alfred(self, mensagem, user_platform_id, conversation_id, platform="telegram"):
+    def Alfred(self, mensagem, user_platform_id, conversation_id, platform="telegram"):
         self.register_status(user_platform_id, platform)
-        all_paths = get_user_file_paths(app, user_platform_id, 
+        all_paths = get_user_file_paths(self.app, user_platform_id, 
                         self.UPLOAD_URL_VIDEOMANAGER,
                         self.project_name,
                         self.USER_ID_FOR_TEST
@@ -122,7 +122,7 @@ Aqui voce encontra Contexto e informacoes de documentos para conseguir entender 
                            
                            ] 
                 
-        session = SQLiteSession(f"{conversation_id}", os.path.join(os.path.dirname(__file__), 'conversations.db'))
+        session = SQLiteSession(f"{conversation_id}", os.path.join(os.path.dirname(__file__), '../', '../', 'Knowledge', 'Db', 'conversations.db'))
 
         agent = Agent(
             name=self.nameAlfred,
@@ -131,7 +131,7 @@ Aqui voce encontra Contexto e informacoes de documentos para conseguir entender 
             tools=Tools_Name_dict,
         )
 
-        result = await Runner.run(agent, mensagem, max_turns=300, session=session)
+        result = Runner.run_sync(agent, mensagem, max_turns=300, session=session)
         raw_ = result.final_output
         logger.info(raw_)
 
@@ -143,7 +143,7 @@ Aqui voce encontra Contexto e informacoes de documentos para conseguir entender 
         Registra ou atualiza o status do agente Alfred no banco.
         """
         try:
-            with app.app_context():
+            with self.app.app_context():
 
                 user = resolve_user_identifier(user_platform_id)
                
@@ -156,8 +156,8 @@ Aqui voce encontra Contexto e informacoes de documentos para conseguir entender 
                     "area": "Suporte Ao Cliente",
                     "tasks": ["Responder usuários", "Abrir tickets", "Coletar feedback"],
                     "platform": f"{platform}",
-                    "container_name": f"alfred-{platform}-agent-dev",
-                    "image_name": f"{platform}-server-dev:latest",
+                    "container_name": f"alfred-{platform}-agent",
+                    "image_name": f"{platform}-server:latest",
                     "status": "online",
                 }
                 if agent:

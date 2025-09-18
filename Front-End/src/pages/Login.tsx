@@ -1,10 +1,10 @@
-// webproject\src\components\LoginForm.tsx
-import React, { useState, useEffect } from 'react';
+// webproject\src/components\LoginForm.tsx
+import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Mail, Lock, LogIn, UserPlus, Sun, Moon } from 'lucide-react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Mail, Lock, LogIn, UserPlus, Loader2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 
 const LoginForm: React.FC = () => {
@@ -12,181 +12,158 @@ const LoginForm: React.FC = () => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+
+  // Melhoria de UX: estados para loading e erro
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const navigate = useNavigate();
   const { login } = useAuth();
-  const location = useLocation();
 
   const LANDING_APIURL = import.meta.env.VITE_API_BASE_URL;
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email && password) {
-      try {
-        const response = await fetch(`${LANDING_APIURL}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email, password }),
-        });
-        const result = await response.json();
-        if (!response.ok) {
-          alert(result.message || 'Erro no login');
-          return;
-        }
-        // Armazena dados de sessão
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('user_email', email);
-        localStorage.setItem('api_key', result.api_key);
-        localStorage.setItem('expire_time_license', result.expire_time_license);
-        // Formata horário do login
-        const now = new Date();
-        const horas24 = now.getHours();
-        const horas12 = horas24 % 12 || 12;
-        const minutos = now.getMinutes().toString().padStart(2, '0');
-        const ampm = horas24 < 12 ? 'am' : 'pm';
-        const dia = now.getDate().toString().padStart(2, '0');
-        const meses = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-        const mesAbrev = meses[now.getMonth()];
-        const ano = now.getFullYear();
-        const formattedTime = `${horas12}:${minutos} ${ampm} ${dia} ${mesAbrev} ${ano}`;
-        localStorage.setItem('login_time', formattedTime);
-        login(result.api_key);
-        navigate(`/dashboard`);
-      } catch (err) {
-        console.error('Erro ao fazer login:', err);
-        alert('Erro ao tentar logar. Verifique sua conexão ou tente novamente.');
+    if (!email || !password) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${LANDING_APIURL}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || 'Erro no login');
       }
+      
+      // Armazena dados de sessão
+      localStorage.setItem('isAuthenticated', 'true');
+      localStorage.setItem('user_email', email);
+      localStorage.setItem('api_key', result.api_key);
+      localStorage.setItem('expire_time_license', result.expire_time_license);
+      
+      const formattedTime = new Date().toLocaleString('en-US', {
+        hour: 'numeric', minute: 'numeric', hour12: true,
+        day: '2-digit', month: 'short', year: 'numeric'
+      });
+      localStorage.setItem('login_time', formattedTime);
+      
+      login(result.api_key);
+      navigate(`/dashboard`);
+
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password || !confirmPassword) {
-      alert('Preencha todos os campos.');
-      return;
-    }
     if (password !== confirmPassword) {
-      alert('As senhas não coincidem.');
+      setError('As senhas não coincidem.');
       return;
     }
+    
+    setIsLoading(true);
+    setError(null);
+
     try {
       const response = await fetch(`${LANDING_APIURL}/create-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, password: password,subscription_plan: 'startup', expiration: 'None' }),
+        body: JSON.stringify({ email, password, subscription_plan: 'startup', expiration: 'None' }),
       });
       const result = await response.json();
+
       if (!response.ok) {
-        alert(result.message || 'Erro no registro');
-        return;
+        throw new Error(result.message || 'Erro no registro');
       }
-      alert('Registro realizado com sucesso! Você já pode fazer login.');
-      // toggleMode();
-    } catch (err) {
-      console.error('Erro ao registrar:', err);
-      alert('Erro ao tentar registrar. Verifique sua conexão ou tente novamente.');
+      
+      // Sucesso! Volta para a tela de login.
+      setIsRegistering(false);
+      // Você pode adicionar uma notificação de sucesso aqui (usando um 'toast', por exemplo)
+
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  const toggleMode = () => {
+    setIsRegistering(!isRegistering);
+    setError(null); // Limpa erros ao trocar de modo
+  };
 
   return (
-    <div className={`min-h-screen flex items-center justify-center ${isDarkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-gray-50 to-gray-100'} p-4 transition-colors duration-300`}>
-      <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
-        <div className="w-full max-w-md mx-auto lg:mx-0">
-          <div className="text-center mb-8">
-            <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'} mb-2`}>AI Support Workers</h1>
-          </div>
-          <Card className={`border-0 shadow-xl transition-colors duration-300 ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
-            <CardHeader className="text-center pb-2">
-              {isRegistering ? (
-                <>
-                  <UserPlus size={24} className="mx-auto text-green-600" />
-                  <h2 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>Register</h2>
-                </>
-              ) : (
-                <>
-                  <LogIn size={24} className="mx-auto text-purple-600" />
-                  <h2 className={`text-2xl font-bold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>Login</h2>
-                </>
-              )}
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {isRegistering ? (
-                <form onSubmit={handleRegister} className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <Mail size={20} className={`text-${isDarkMode ? 'gray-200' : 'gray-700'}`} />
-                      <span className={`font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>Email</span>
-                    </div>
-                    <Input type="email" placeholder="Enter your email" value={email} onChange={e => setEmail(e.target.value)} className="h-12" required />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <Lock size={20} className={`text-${isDarkMode ? 'gray-200' : 'gray-700'}`} />
-                      <span className={`font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>Senha</span>
-                    </div>
-                    <Input type="password" placeholder="Enter your password" value={password} onChange={e => setPassword(e.target.value)} className="h-12" required />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <Lock size={20} className={`text-${isDarkMode ? 'gray-200' : 'gray-700'}`} />
-                      <span className={`font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>Confirmar Senha</span>
-                    </div>
-                    <Input type="password" placeholder="Confirm your password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} className="h-12" required />
-                  </div>
-                  <Button type="submit" className="w-full h-12 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-medium rounded-lg transition-all duration-200">
-                    <UserPlus size={20} className="mr-2" />
-                    Register
-                  </Button>
-                  <p className="text-center text-sm mt-4">
-                    Já tem conta?{' '}
-                    <button
-                      type="button"
-                      onClick={() => setIsRegistering(false)}
-                      className="text-purple-600 hover:underline"
-                    >
-                      Fazer login
-                    </button>
-                  </p>
-                </form>
-              ) : (
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <Mail size={20} className={`text-${isDarkMode ? 'gray-200' : 'gray-700'}`} />
-                      <span className={`font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>Email</span>
-                    </div>
-                    <Input type="email" placeholder="Enter your Email" value={email} onChange={e => setEmail(e.target.value)} className="h-12" required />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <Lock size={20} className={`text-${isDarkMode ? 'gray-200' : 'gray-700'}`} />
-                      <span className={`font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>Password</span>
-                    </div>
-                    <Input type="password" placeholder="Enter your password" value={password} onChange={e => setPassword(e.target.value)} className="h-12" required />
-                  </div>
-                  <Button type="submit" className="w-full h-12 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-medium rounded-lg transition-all duration-200">
-                    <LogIn size={20} className="mr-2" />
-                    Login
-                  </Button>
-                  <p className="text-center text-white-600 text-sm mt-4">
-                    Não tem conta?{' '}
-                    <button
-                      type="button"
-                      onClick={() => setIsRegistering(true)}
-                      className="text-green-600 hover:underline"
-                    >
-                      Criar conta
-                    </button>
-                  </p>
-                </form>
-              )}
-            </CardContent>
-          </Card>
+    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-foreground">Employers AI</h1>
+          <p className="text-muted-foreground">
+            {isRegistering ? "Crie sua conta para começar" : "Bem-vindo de volta! Faça login para continuar"}
+          </p>
         </div>
-        <div className="hidden lg:flex items-center justify-center">
-          {/* Ilustração permanece inalterada */}
-        </div>
+        
+        <Card className="shadow-lg">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl">
+              {isRegistering ? 'Criar Conta' : 'Login'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={isRegistering ? handleRegister : handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-muted-foreground flex items-center" htmlFor="email">
+                  <Mail className="mr-2 h-4 w-4" /> Email
+                </label>
+                <Input id="email" type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required disabled={isLoading} />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-muted-foreground flex items-center" htmlFor="password">
+                  <Lock className="mr-2 h-4 w-4" /> Senha
+                </label>
+                <Input id="password" type="password" placeholder="Sua senha" value={password} onChange={e => setPassword(e.target.value)} required disabled={isLoading} />
+              </div>
+
+              {isRegistering && (
+                <div className="space-y-2">
+                   <label className="text-sm font-medium text-muted-foreground flex items-center" htmlFor="confirmPassword">
+                    <Lock className="mr-2 h-4 w-4" /> Confirmar Senha
+                  </label>
+                  <Input id="confirmPassword" type="password" placeholder="Confirme sua senha" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required disabled={isLoading} />
+                </div>
+              )}
+
+              {error && (
+                <p className="text-sm text-destructive-foreground bg-destructive p-2 rounded-md text-center">{error}</p>
+              )}
+
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  isRegistering ? <UserPlus className="mr-2 h-4 w-4" /> : <LogIn className="mr-2 h-4 w-4" />
+                )}
+                {isRegistering ? 'Registrar' : 'Entrar'}
+              </Button>
+            </form>
+
+            <p className="text-center text-sm text-muted-foreground mt-6">
+              {isRegistering ? 'Já tem uma conta?' : 'Não tem uma conta?'}
+              <Button variant="link" onClick={toggleMode} className="font-semibold text-primary">
+                {isRegistering ? 'Fazer login' : 'Criar conta'}
+              </Button>
+            </p>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

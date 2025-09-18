@@ -15,12 +15,12 @@ from docker import DockerClient, errors
 import docker 
 import asyncio
 import logging
+from flask_cors import CORS
 from flask import request, jsonify
 from typing import Dict, Any, Optional
 from datetime import datetime
 import time
 from sqlalchemy import desc, func, and_
-from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
 
 from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
@@ -30,14 +30,16 @@ from Modules.FileServer.upload_ import upload_
 from Modules.FileServer.download_ import download_
 from Modules.FileServer.delete_file import delete_file
 
-
-
+# from Agents.AssistantSupport.ai import Alfred as alfredai
 from Agents.ClientChat.ai import CustomerChatAgent
 from Modules.Models.postgressSQL import db, AgentStatus, Ticket, User, Message, Config, AlfredFile, AgentStatus
 
 app = Flask(__name__)
+# Alfredclass = alfredai(app)
+# Alfred = Alfredclass.Alfred
 asgi_app = WsgiToAsgi(app)
-CORS(app, origins=["https://www.employers-ai.site", "https://employers-ai.site"])
+VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
+CORS(app, origins=['https://87086624075f.ngrok-free.app', "https://www.employers-ai.site", "https://employers-ai.site"])
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
@@ -195,6 +197,45 @@ def chat_assistant():
             "message": "Ocorreu um erro interno. Nossa equipe foi notificada."
         }), 500
 
+# @app.route("/api/alfred", methods=["POST"])
+# def chat_alfred():
+#     try:
+#         data = request.json
+#         if not data:
+#             return jsonify({"success": False, "error": "JSON payload required"}), 400
+
+#         user_msg = data.get("message", "").strip()
+#         if not user_msg:
+#             return jsonify({"success": False, "error": "Message field is required"}), 400
+
+#         user_id = data.get("user_id") 
+#         if not user_id:
+#             return jsonify({"error": "user_id é obrigatório."}), 400
+            
+#         user = resolve_user_identifier(user_id)
+#         if not user:
+#             return jsonify({"error": "Usuário não encontrado."}), 404
+
+#         numeric_user_id = user.id
+
+#         plataform = data.get("plataform")
+#         session_id = data.get("session_id") or str(uuid.uuid4())
+
+#         Alfred_response = Alfred(user_msg, user_id, session_id, plataform)
+
+#         return jsonify({
+#             "success": True,
+#             "message": Alfred_response
+#         }), 200
+
+#     except Exception as e:
+#         logger.error(f"Unexpected error in chat_assistant: {str(e)}", exc_info=True)
+#         return jsonify({
+#             "success": False,
+#             "error": "Internal server error",
+#             "message": "Ocorreu um erro interno. Nossa equipe foi notificada."
+#         }), 500
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def handle_config():
     user_id = request.args.get("user_id") or (request.get_json() or {}).get("user_id")
@@ -240,7 +281,6 @@ def handle_config():
             logger.exception(f"Error saving configurations: {e}")
             return jsonify({"error": "Erro ao salvar configurações."}), 500
         
-
 @app.route('/api/alfred-files/upload', methods=['POST'])
 def upload_alfred_file():
     if 'file' not in request.files:
@@ -300,8 +340,6 @@ def upload_alfred_file():
     except Exception as e:
         logger.exception(f"Erro no upload do arquivo: {e}")
         return jsonify({"error": "Erro no servidor ao processar o upload."}), 500
-
-
 
 @app.route('/api/agents/metrics', methods=['GET'])
 def get_agent_metrics():
@@ -461,8 +499,6 @@ def get_agents_list():
             'error': 'Erro interno do servidor',
             'details': str(e)
         }), 500
-
-
 
 @app.route('/api/tickets/metrics', methods=['GET'])
 def get_ticket_metrics():
@@ -1636,11 +1672,17 @@ def initialize_agent():
         discordChannelId = bot_config_data.get("discordChannelId")
         discordBotToken = bot_config_data.get("discordBotToken")
 
+        waServerUrl = bot_config_data.get("waServerUrl")
+        waInstanceId = bot_config_data.get("waInstanceId")
+        waApiKey = bot_config_data.get("waApiKey")
+        waSupportGroupJid = bot_config_data.get("waSupportGroupJid")
+
+
         if not botToken:
             return jsonify({"message": f"botToken não configurado para user_id={user_id}"}), 400
 
         # 🔹 Criar container
-        image_name = f"{platform}-server-dev:latest"
+        image_name = f"mediacutsstudio/{platform}-server:latest"
         container = client.containers.run(
             image=image_name,
             name=container_name,
@@ -1649,7 +1691,7 @@ def initialize_agent():
             volumes={
                 "alfred_knowledge_data": {"bind": "/app/Knowledge", "mode": "rw"},
                 "logger_data": {"bind": "/app/Logs", "mode": "rw"},
-                "data_filedb": {"bind": "/app/Db", "mode": "rw"},
+        
             },
             network="rede_externa",
             mem_limit="500m",
@@ -1657,13 +1699,18 @@ def initialize_agent():
             working_dir="/app",
             command="sh -c 'python Telegram.py'" if platform == "telegram" else
                     "sh -c 'python Discord.py'" if platform == "discord" else
-                    "sh -c 'ngrok http --domain=humane-wallaby-obliging.ngrok-free.app 5200 --log=stdout & uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'",
+                    "sh -c 'uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'",
             environment={
                 "USER_ID": str(user_id),
                 "botToken": str(botToken),
                 "channelId": str(channelId or ""),
                 "discordChannelId": str(discordChannelId or ""),
-                "discordBotToken": str(discordBotToken or "")
+                "discordBotToken": str(discordBotToken or ""),
+            
+                "waServerUrl": str(waServerUrl or ""),
+                "waInstanceId": str(waInstanceId or ""),
+                "waApiKey": str(waApiKey or ""),
+                "waSupportGroupJid": str(waSupportGroupJid or "")
             }
         )
 
@@ -1832,7 +1879,6 @@ def trocar_code_por_token(code):
 
 
 
-VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
 
 def _get_container_name(platform: str, user_id: str) -> str:
     return f"alfred-{platform}-{user_id}-agent"

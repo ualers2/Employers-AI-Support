@@ -10,9 +10,10 @@ import logging
 from api import app
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 from Modules.FileServer.download_ import download_
-from Functions.TicketProblem import *
 from Modules.Agents.EgetMetadataAgent import *
-from Functions.autosave import autosave
+from Modules.Functions.autosave import autosave
+from Modules.Functions.TicketProblem import *
+
 from Modules.Services.Resolvers.send_email import SendEmail
 
 from Modules.Services.Geters.user_file_paths import get_user_file_paths
@@ -256,7 +257,7 @@ Aqui voce encontra Contexto e informacoes de documentos para conseguir entender 
         """
         Tools_Name_dict = [autosave]
                 
-        session = SQLiteSession(f"{conversation_id}", os.path.join(os.path.dirname(__file__), '../',  '../', 'Db', 'conversations.db'))
+        session = SQLiteSession(f"{conversation_id}", os.path.join(os.path.dirname(__file__),  '../', '../', 'Knowledge', 'Db', 'conversations.db'))
 
         agent = Agent(
             name=self.nameAlfred,

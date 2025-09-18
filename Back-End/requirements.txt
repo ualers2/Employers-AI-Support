@@ -15,16 +15,16 @@ discord.py
 python-dotenv
 waitress
 PyYAML
-matplotlib
+# matplotlib
 firebase-admin
 typing-extensions
-huggingface_hub
+# huggingface_hub
 pydantic
 waitress
 user-agents
-stripe
+# stripe
 SQLAlchemy==2.0.25
 psycopg2-binary==2.9.7
 PyYAML==6.0
 Flask-SQLAlchemy==3.1.1
-softwareai_engine_library
+# softwareai_engine_library

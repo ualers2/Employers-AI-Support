@@ -13,11 +13,10 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),  'Keys', 'keys.e
 os.chdir(os.path.join(os.path.dirname(__file__)))
 
 
-from Agents.AssistantSupport.ai import Alfred
-from Keys.Firebase.FirebaseApp import init_firebase
-from Modules.Loggers.logger import setup_logger 
+from Agents.AssistantSupport.ai import Alfred as alfredai
+
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
-# from api import app
+from api import app
 
 
 from Modules.Services.Geters.user_info import _get_user_info
@@ -26,7 +25,7 @@ from Modules.Services.Seters.status_online import set_status_online
 from Modules.Services.Updaters.user_interaction import _update_interaction_status_postgres
 from Modules.Services.Updaters.social_uptimer import start_uptime_updater
 from Modules.Services.Resolvers.user_identifier import resolve_user_identifier
-
+from Modules.Loggers.logger import setup_logger 
 
 
 
@@ -37,7 +36,7 @@ class Telegram:
 
     - os agentes softwareai podem dar suporte a perguntas de usuarios e enviar imagens ao canal
     """
-    def __init__(self, TOKEN, CHANNEL_ID, user_platform_id):
+    def __init__(self, TOKEN, CHANNEL_ID, user_platform_id, app):
         self.TelegramTOKEN = TOKEN
         self.CHANNEL_ID = CHANNEL_ID
         self.active_interactions = {}
@@ -46,7 +45,7 @@ class Telegram:
         self.user_platform_id = user_platform_id
         set_status_online(self.user_platform_id, category="Telegram")
         start_uptime_updater(self.user_platform_id, category="Telegram")
-        Alfredclass = Alfred()
+        Alfredclass = alfredai(app)
         self.Alfred = Alfredclass.Alfred
                 
         self.log = setup_logger("Telegram", "Telegram.log", logging.DEBUG)
@@ -74,7 +73,7 @@ class Telegram:
 
         _save_message_to_postgres(self.user_platform_id, chat_id, "user", user_text, user_info)
 
-        Alfred_response = await self.Alfred(user_text, self.user_platform_id, chat_id, "telegram")
+        Alfred_response = self.Alfred(user_text, self.user_platform_id, chat_id, "telegram")
 
         # if Deletemessage:
         #     try:
@@ -175,5 +174,5 @@ if __name__ == '__main__':
     user_platform_id = os.getenv("USER_ID") 
     TOKEN = os.getenv("botToken") 
     CHANNEL_ID =  os.getenv("channelId") 
-    Telegram_instance = Telegram(TOKEN, CHANNEL_ID, user_platform_id)
+    Telegram_instance = Telegram(TOKEN, CHANNEL_ID, user_platform_id, app)
     Telegram_instance.main_telegram()

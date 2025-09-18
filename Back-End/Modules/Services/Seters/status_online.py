@@ -49,5 +49,23 @@ def set_status_online(user_platform_id, category="Discord"):
             else:
                 agent.status = "online"
                 agent.last_update = datetime.now(timezone.utc)
+        
+        elif category == "WhatsApp":
+
+            agent = AgentStatus.query.filter_by(platform="WhatsApp", user_id=numeric_user_id).first()
+            if not agent:
+                agent = AgentStatus(
+                    platform="WhatsApp",
+                    status="online",
+                    last_update=datetime.now(timezone.utc),
+                    image_name="whatsapp-server:latest",
+                    container_name="whatsapp-telegram-agent",
+                    user_id=numeric_user_id
+                )
+                db.session.add(agent)
+            else:
+                agent.status = "online"
+                agent.last_update = datetime.now(timezone.utc)
+        
 
         db.session.commit()

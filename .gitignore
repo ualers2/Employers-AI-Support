@@ -12,5 +12,10 @@ Pipelines/PullRequest/Internalserver/Dev/
 Pipelines/PullRequest/Internalserver/Keys/
 Pipelines/PullRequest/Internalserver/Production/
 Pipelines/PullRequest/Internalserver/_test.py
+Back-End/Agents/JobSearch/Curriculo/
+Back-End/Agents/JobSearch/Reports/
+Back-End/Agents/TecnicalDoc/example.py
+
+
 **.env
 **__pycache__

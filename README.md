@@ -1,5 +1,5 @@
 # Employers AI: Agentes de Suporte para SaaS
-![Imagem](Docs/gifs/Screenshot_2.png)
+![Imagem](Gifs/Screenshot_2.png)
 
 
 ## Visão Geral

@@ -16,7 +16,7 @@ ENV NODE_ENV=development
 RUN npm install --legacy-peer-deps
 RUN npm install vite --save-dev
 RUN npm install @rollup/rollup-linux-x64-gnu 
-
+RUN npm i --save-dev @types/node
 # 6. Coloca o binário local no PATH (para que 'vite' seja encontrado)
 ENV PATH /app/node_modules/.bin:$PATH
 # Copia todo o código da landingpage
