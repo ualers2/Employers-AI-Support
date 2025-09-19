@@ -121,7 +121,6 @@ services:
     mem_limit: 500MB
     cpus: "1.25"   
 
-
   whatsapp:
     image: whatsapp-server:latest
     container_name: alfred-whatsapp-agent
@@ -146,6 +145,69 @@ services:
       - rede_externa
     mem_limit: 500MB
     cpus: "1.25"   
+
+
+
+
+  telegram-build:
+    image: telegram-server:latest
+    container_name: alfred-telegram-agent
+    restart: always
+    volumes:
+      - alfred_knowledge_data:/app/Knowledge
+      - logger_data:/app/Logs
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    working_dir: /app
+    command: >
+      sh -c "python --version"
+    networks:
+      - rede_externa
+    mem_limit: 500MB
+    cpus: "1.25"   
+
+  discord-build:
+    image: discord-server:latest
+    container_name: alfred-discord-agent
+    restart: always
+    volumes:
+      - alfred_knowledge_data:/app/Knowledge
+      - logger_data:/app/Logs
+    command: >
+      sh -c "python --version"
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    working_dir: /app
+    networks:
+      - rede_externa
+    mem_limit: 500MB
+    cpus: "1.25"   
+
+  whatsapp-build:
+    image: whatsapp-server:latest
+    container_name: alfred-whatsapp-agent
+    restart: always
+    volumes:
+      - alfred_knowledge_data:/app/Knowledge
+      - logger_data:/app/Logs 
+      
+    environment:
+      - NGROK_AUTHTOKEN=2tVpX4kNbZmrr5O64bEXiD85NM9_7WSymtWCdpmGfVCwRgSXh
+    build:
+      context: ./Back-End
+      dockerfile: Dockerfile
+    command: >
+      sh -c "python --version"
+    ports:
+      - "5200:5200"
+    working_dir: /app
+    networks:
+      - rede_externa
+    mem_limit: 500MB
+    cpus: "1.25"   
+
 
   evolution-api:
     container_name: whatsapp-evolution-api

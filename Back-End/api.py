@@ -64,7 +64,7 @@ if not os.path.exists(UPLOAD_FOLDER):
 METADATA_FILE_PATH = os.path.join(UPLOAD_FOLDER, 'alfred_files_metadata.json')
 last_alfred_heartbeat = datetime.now(timezone.utc)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@meu_postgres:5432/meubanco")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres_1:5432/meubanco_prod")
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
