@@ -19,10 +19,14 @@ def set_status_online(user_platform_id, category="Discord"):
             agent = AgentStatus.query.filter_by(platform="Discord", user_id=numeric_user_id).first()
             if not agent:
                 agent = AgentStatus(
+                    name="Alfred Discord Agent",
+                    area="Suporte Ao Cliente",
+                    tasks=['Responder usuários', 'Abrir tickets', 'Coletar feedback'],
+                    workingHours='24/7',
                     platform="Discord",
                     status="online",
                     last_update=datetime.now(timezone.utc),
-                    image_name="discord-server:latest",
+                    image_name="mediacutsstudio/discord-server:latest",
                     container_name="alfred-discord-agent",
                     user_id=numeric_user_id
                 )
@@ -36,10 +40,14 @@ def set_status_online(user_platform_id, category="Discord"):
             agent = AgentStatus.query.filter_by(platform="Telegram", user_id=numeric_user_id).first()
             if not agent:
                 agent = AgentStatus(
+                    name="Alfred Telegram Agent",
+                    area="Suporte Ao Cliente",
+                    tasks=['Responder usuários', 'Abrir tickets', 'Coletar feedback'],
+                    workingHours='24/7',
                     platform="Telegram",
                     status="online",
                     last_update=datetime.now(timezone.utc),
-                    image_name="telegram-server:latest",
+                    image_name="mediacutsstudio/telegram-server:latest",
                     container_name="alfred-telegram-agent",
                     user_id=numeric_user_id
                 )
@@ -53,10 +61,14 @@ def set_status_online(user_platform_id, category="Discord"):
             agent = AgentStatus.query.filter_by(platform="WhatsApp", user_id=numeric_user_id).first()
             if not agent:
                 agent = AgentStatus(
+                    name="Alfred WhatsApp Agent",
+                    area="Suporte Ao Cliente",
+                    tasks=['Responder usuários', 'Abrir tickets', 'Coletar feedback'],
+                    workingHours='24/7',
                     platform="WhatsApp",
                     status="online",
                     last_update=datetime.now(timezone.utc),
-                    image_name="whatsapp-server:latest",
+                    image_name="mediacutsstudio/whatsapp-server:latest",
                     container_name="whatsapp-telegram-agent",
                     user_id=numeric_user_id
                 )

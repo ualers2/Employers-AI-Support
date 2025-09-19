@@ -8,8 +8,8 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import os
 
-from dotenv import load_dotenv, find_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),  'Keys', 'keys.env'))
+# from dotenv import load_dotenv, find_dotenv
+# load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__),  'Keys', 'keys.env'))
 os.chdir(os.path.join(os.path.dirname(__file__)))
 
 
@@ -63,7 +63,8 @@ class Telegram:
         telegram_message = update.message
         chat_id = str(telegram_message.chat.id)
 
-        user_info = _get_user_info(telegram_message.from_user, chat_id, telegram_user=telegram_message.from_user, category="Telegram")
+        user_info = _get_user_info(chat_id, telegram_user=telegram_message.from_user, category="Telegram")
+
         
         user_text = telegram_message.text
 
@@ -73,7 +74,7 @@ class Telegram:
 
         _save_message_to_postgres(self.user_platform_id, chat_id, "user", user_text, user_info)
 
-        Alfred_response = self.Alfred(user_text, self.user_platform_id, chat_id, "telegram")
+        Alfred_response = await self.Alfred(user_text, self.user_platform_id, chat_id, "telegram")
 
         # if Deletemessage:
         #     try:
@@ -100,7 +101,7 @@ class Telegram:
             telegram_message = update.message
             chat_id = str(telegram_message.chat.id)
 
-            user_info = _get_user_info(telegram_message.from_user, chat_id, telegram_user=telegram_message.from_user, category="Telegram")
+            user_info = _get_user_info(chat_id, telegram_user=telegram_message.from_user, category="Telegram")
             user_text = telegram_message.text
 
             self.log.info(f"chat_id {chat_id}")
