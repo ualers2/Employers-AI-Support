@@ -21,6 +21,11 @@ jobs:
       uses: webfactory/ssh-agent@v0.9.1
       with:
         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+    - name: Docker Login
+      run: |
+        ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+          echo '${{ secrets.DOCKERHUB_PASSWORD }}' | docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' --password-stdin
+        "
 
     - name: Add remote host to known_hosts
       run: |
