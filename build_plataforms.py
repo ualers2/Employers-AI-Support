@@ -10,7 +10,9 @@ def build_tag_push(servico, ignore_file, repo_name):
     # 1️⃣ Copia o dockerignore específico
     shutil.copy(ignore_file, ".dockerignore")
 
-    # 2️⃣ Build da imagem local
+    executar_comando(f"docker rmi -f {repo_name}:latest")
+    executar_comando(f"docker rmi -f mediacutsstudio/{repo_name}:latest")
+
     executar_comando(f"docker-compose build {servico}")
 
     # 3️⃣ Tag da imagem local para o Docker Hub
