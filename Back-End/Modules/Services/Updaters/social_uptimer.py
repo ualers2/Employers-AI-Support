@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from Agents.AssistantSupport.ai import Alfred
 import threading
-from Keys.Firebase.FirebaseApp import init_firebase
 from Modules.Loggers.logger import setup_logger 
 from Modules.Models.postgressSQL import db, User, Message, Config, AlfredFile, AgentStatus
 

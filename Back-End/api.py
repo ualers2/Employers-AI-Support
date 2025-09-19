@@ -4,6 +4,7 @@ import os
 import logging
 import uuid
 import json
+import subprocess
 import re
 import asyncio
 from flask import Flask, jsonify, request, send_from_directory
@@ -1683,6 +1684,7 @@ def initialize_agent():
 
         # 🔹 Criar container
         image_name = f"mediacutsstudio/{platform}-server:latest"
+        subprocess.run(f"docker rmi -f {image_name}", shell=True)
         container = client.containers.run(
             image=image_name,
             name=container_name,
