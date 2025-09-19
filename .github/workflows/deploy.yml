@@ -71,21 +71,21 @@ jobs:
 
           # --- Build, Tag e Push dos agentes ---
           # WhatsApp
-          cp .dockerignore.whatsapp .dockerignore && \
+          cp Back-End/.dockerignore.whatsapp Back-End/.dockerignore && \
           docker-compose build whatsapp-build && \
           docker tag whatsapp-server:latest mediacutsstudio/whatsapp-server:latest && \
           docker push mediacutsstudio/whatsapp-server:latest && \
           rm .dockerignore && \
 
           # Discord
-          cp .dockerignore.discord .dockerignore && \
+          cp Back-End/.dockerignore.discord Back-End/.dockerignore && \
           docker-compose build discord-build && \
           docker tag discord-server:latest mediacutsstudio/discord-server:latest && \
           docker push mediacutsstudio/discord-server:latest && \
           rm .dockerignore && \
 
           # Telegram
-          cp .dockerignore.telegram .dockerignore && \
+          cp Back-End/.dockerignore.telegram Back-End/.dockerignore && \
           docker-compose build telegram-build && \
           docker tag telegram-server:latest mediacutsstudio/telegram-server:latest && \
           docker push mediacutsstudio/telegram-server:latest && \
