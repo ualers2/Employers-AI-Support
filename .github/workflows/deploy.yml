@@ -74,7 +74,9 @@ jobs:
         ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
           cd /home/administrator/deploys/employersai && \
 
-          # --- Build, Tag e Push dos agentes ---
+          # --- Delet, Build, Tag e Push dos agentes ---
+          docker rmi $(docker images -f "dangling=true" -q) && \
+
           # WhatsApp
           cp Back-End/.dockerignore.whatsapp Back-End/.dockerignore && \
           docker rmi -f mediacutsstudio/whatsapp-server:latest && \

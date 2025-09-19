@@ -54,6 +54,17 @@ except docker.errors.DockerException as e:
     logger.warning(f"Não foi possível conectar ao Docker: {e}")
     client = None 
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = os.getenv("SMTP_PORT")
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
+
+
+
 UPLOAD_URL_VIDEOMANAGER = os.getenv("UPLOAD_URL")
 project_name = os.getenv("Employers_AI_Support")
 USER_ID_FOR_TEST = os.getenv("USER_ID_FOR_TEST")
@@ -1694,22 +1705,22 @@ def initialize_agent():
             volumes={
                 "alfred_knowledge_data": {"bind": "/app/Knowledge", "mode": "rw"},
                 "logger_data": {"bind": "/app/Logs", "mode": "rw"},
-                os.path.join(os.path.dirname(__file__), "Keys", "keys.env"): {"bind": "/app/Keys/keys.env", "mode": "ro"}
             },
             network="rede_externa",
-            mem_limit="500m",
+            mem_limit="300m",
             nano_cpus=int(1.25 * 1e9),
             working_dir="/app",
             command="sh -c 'python Telegram.py'" if platform == "telegram" else
                     "sh -c 'python Discord.py'" if platform == "discord" else
                     "sh -c 'uvicorn WhatsApp:app --host 0.0.0.0 --port 5200'",
             environment={
+                "OPENAI_API_KEY": OPENAI_API_KEY,
+                "GEMINI_API_KEY": GEMINI_API_KEY,
                 "USER_ID": str(user_id),
                 "botToken": str(botToken),
                 "channelId": str(channelId or ""),
                 "discordChannelId": str(discordChannelId or ""),
                 "discordBotToken": str(discordBotToken or ""),
-            
                 "waServerUrl": str(waServerUrl or ""),
                 "waInstanceId": str(waInstanceId or ""),
                 "waApiKey": str(waApiKey or ""),
