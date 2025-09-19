@@ -74,7 +74,7 @@ class Discord:
 
             _save_message_to_postgres(self.user_platform_id, chat_id, "user", discord_message, user_info)
 
-            Alfred_response =  self.Alfred(discord_message, self.user_platform_id, chat_id, "discord")
+            Alfred_response =  await self.Alfred(discord_message, self.user_platform_id, chat_id, "discord")
 
             # if Deletemessage:
             #     try:

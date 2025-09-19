@@ -49,7 +49,7 @@ class Alfred:
         self.USER_ID_FOR_TEST = os.getenv("USER_ID_FOR_TEST")
         self.AGENT_PLATFORM = "alfred" 
 
-    def Alfred(self, mensagem, user_platform_id, conversation_id, platform="telegram"):
+    async def Alfred(self, mensagem, user_platform_id, conversation_id, platform="telegram"):
         self.register_status(user_platform_id, platform)
         all_paths = get_user_file_paths(self.app, user_platform_id, 
                         self.UPLOAD_URL_VIDEOMANAGER,
@@ -131,7 +131,7 @@ Aqui voce encontra Contexto e informacoes de documentos para conseguir entender 
             tools=Tools_Name_dict,
         )
 
-        result = Runner.run_sync(agent, mensagem, max_turns=300, session=session)
+        result = await Runner.run(agent, mensagem, max_turns=300, session=session)
         raw_ = result.final_output
         logger.info(raw_)
 

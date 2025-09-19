@@ -1685,6 +1685,7 @@ def initialize_agent():
         # 🔹 Criar container
         image_name = f"mediacutsstudio/{platform}-server:latest"
         subprocess.run(f"docker rmi -f {image_name}", shell=True)
+
         container = client.containers.run(
             image=image_name,
             name=container_name,
@@ -1693,7 +1694,7 @@ def initialize_agent():
             volumes={
                 "alfred_knowledge_data": {"bind": "/app/Knowledge", "mode": "rw"},
                 "logger_data": {"bind": "/app/Logs", "mode": "rw"},
-        
+                os.path.join(os.path.dirname(__file__), "Keys", "keys.env"): {"bind": "/app/Keys/keys.env", "mode": "ro"}
             },
             network="rede_externa",
             mem_limit="500m",
@@ -1839,6 +1840,9 @@ def delete_agent(platform):
             if container.status == "running":
                 container.stop(timeout=10)
             container.remove(force=True)
+            image_name = f"mediacutsstudio/{platform}-server:latest"
+            subprocess.run(f"docker rmi -f {image_name}", shell=True)
+        
             return jsonify({"message": f"Container '{container_name}' removido.", "status": "deleted"}), 200
 
         except docker.errors.NotFound:

@@ -70,7 +70,7 @@ async def whatsapp_webhook(request: Request):
         _save_message_to_postgres(user_platform_id, chat_id, "user", wats_message, user_info)
 
         Alfred_i = alfredai(app_flask).Alfred
-        resposta = Alfred_i(wats_message, user_platform_id, chat_id, "whatsapp")
+        resposta = await Alfred_i(wats_message, user_platform_id, chat_id, "whatsapp")
 
         log.info(f"Resposta do Alfred: {resposta}")
 
