@@ -22,7 +22,7 @@ typing-extensions
 pydantic
 waitress
 user-agents
-# stripe
+gunicorn
 SQLAlchemy==2.0.25
 psycopg2-binary==2.9.7
 PyYAML==6.0
