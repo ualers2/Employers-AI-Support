@@ -1,3 +1,4 @@
+# Back-End\Agents\ClientChat\ai.py
 from agents import Agent, ItemHelpers, Runner, RunHooks, handoff, ModelSettings, RunConfig, RunContextWrapper, Usage
 import logging
 import os
@@ -10,11 +11,11 @@ import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
-
+from dotenv import load_dotenv
 from Modules.FileServer.upload_ import upload_
 from Modules.FileServer.download_ import download_
 
-from Modules.Services.Geters.user_file_paths import get_user_file_paths
+# from Modules.Services.Geters.user_file_paths import get_user_file_paths
 
 # Configuração de logging
 logger = logging.getLogger(__name__)
@@ -58,10 +59,10 @@ class CustomerChatAnalytics(BaseModel):
 async def CustomerChatAgent(
     content_user: str,
     UPLOAD_FOLDER: str,
+    UPLOAD_URL: str,
     user_context: Optional[Dict[str, Any]] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     model: str = "gpt-4o-mini",
-    UPLOAD_URL: str = os.getenv("UPLOAD_URL"),
     USER_ID: str = "default_user",
     enable_analytics: bool = True
 ):
@@ -90,11 +91,11 @@ async def CustomerChatAgent(
         "Perguntas Frequentes.md",
         "Informações Técnicas.md"
     ]
-    # os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     # Download e processamento dos documentos
-    contents = ""#await _load_company_documents(
-    #     company_documents, filenames, UPLOAD_FOLDER, UPLOAD_URL, USER_ID
-    # )
+    contents = await _load_company_documents(
+        company_documents, filenames, UPLOAD_FOLDER, UPLOAD_URL, USER_ID
+    )
     
     # Análise do contexto do usuário
     user_profile = _analyze_user_context(user_context)
@@ -355,4 +356,4 @@ async def test_customer_chat(UPLOAD_URL, UPLOAD_FOLDER):
             print(f"Erro: {result['error']}")
 
 # if __name__ == "__main__":
-#     asyncio.run(test_customer_chat())
+    # asyncio.run(test_customer_chat())
