@@ -40,7 +40,14 @@ app = Flask(__name__)
 # Alfred = Alfredclass.Alfred
 asgi_app = WsgiToAsgi(app)
 VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
-CORS(app, origins=['https://87086624075f.ngrok-free.app', 'https://mediacutsstudio.com', "https://www.employers-ai.site", "https://employers-ai.site"])
+CORS(app, resources={r"/*": {"origins": [
+    "https://87086624075f.ngrok-free.app",
+    "https://mediacutsstudio.com",
+    "https://www.mediacutsstudio.com",
+    "https://www.employers-ai.site",
+    "https://employers-ai.site"
+]}}, supports_credentials=True)
+
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
@@ -126,8 +133,10 @@ def login():
 
 @app.route("/api/chat-assistant", methods=["POST"])
 def chat_assistant():
+    logger.info(">>> Recebido POST /api/chat-assistant")
     try:
         data = request.json
+        logger.info(f"Payload recebido: {data}")
         if not data:
             return jsonify({"success": False, "error": "JSON payload required"}), 400
 
