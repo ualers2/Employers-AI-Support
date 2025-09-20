@@ -97,6 +97,19 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
+def run_async(coro):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_running():
+        # Já existe um loop ativo (caso do UvicornWorker)
+        return asyncio.ensure_future(coro)  # devolve uma Task
+    else:
+        return loop.run_until_complete(coro)
+
 @app.after_request
 def apply_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "")
@@ -183,7 +196,7 @@ def chat_assistant():
         enriched_context = _enrich_user_context(user_context, request)
 
         UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "storage")
-        result = asyncio.run(CustomerChatAgent(
+        result = run_async(CustomerChatAgent(
             content_user=user_msg,
             UPLOAD_FOLDER=UPLOAD_FOLDER,
             user_context=enriched_context,

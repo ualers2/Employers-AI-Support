@@ -4,7 +4,6 @@ Back-End/Keys/keys.env
 Back-End/Keys/Firebase/FirebaseApp.py
 Back-End/Keys/
 Back-End/Logs/
-Back-End/Tests/
 Back-End/Reports/
 Back-End/AIJobAutomation.py
 Pipelines/PullRequest/Internalserver/keys.env
@@ -15,7 +14,7 @@ Pipelines/PullRequest/Internalserver/_test.py
 Back-End/Agents/JobSearch/Curriculo/
 Back-End/Agents/JobSearch/Reports/
 Back-End/Agents/TecnicalDoc/example.py
-
+Back-End/Saves/
 
 **.env
 **__pycache__
