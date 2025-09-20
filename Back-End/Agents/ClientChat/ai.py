@@ -92,9 +92,9 @@ async def CustomerChatAgent(
     ]
     # os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     # Download e processamento dos documentos
-    contents = await _load_company_documents(
-        company_documents, filenames, UPLOAD_FOLDER, UPLOAD_URL, USER_ID
-    )
+    contents = ""#await _load_company_documents(
+    #     company_documents, filenames, UPLOAD_FOLDER, UPLOAD_URL, USER_ID
+    # )
     
     # Análise do contexto do usuário
     user_profile = _analyze_user_context(user_context)

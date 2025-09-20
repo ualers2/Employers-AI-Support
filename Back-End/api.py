@@ -40,13 +40,18 @@ app = Flask(__name__)
 # Alfred = Alfredclass.Alfred
 asgi_app = WsgiToAsgi(app)
 VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
-CORS(app, resources={r"/*": {"origins": [
-    "https://87086624075f.ngrok-free.app",
-    "https://mediacutsstudio.com",
-    "https://www.mediacutsstudio.com",
-    "https://www.employers-ai.site",
-    "https://employers-ai.site"
-]}}, supports_credentials=True)
+CORS(app, resources={r"/api/*": {
+    "origins": [
+        "https://mediacutsstudio.com",
+        "https://www.mediacutsstudio.com",
+        "https://employers-ai.site",
+        "https://www.employers-ai.site",
+        "https://87086624075f.ngrok-free.app"
+    ],
+    "methods": ["GET", "POST", "OPTIONS", "DELETE", "HEAD", "PATCH", "PUT"],
+    "allow_headers": ["Content-Type", "Authorization"],
+    "supports_credentials": True
+}})
 
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
@@ -91,6 +96,14 @@ db.init_app(app)
 
 with app.app_context():
     db.create_all()
+
+@app.after_request
+def apply_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "")
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
 @app.route("/api/create-login", methods=["POST"])
 def create_login():
