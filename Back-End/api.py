@@ -40,7 +40,7 @@ app = Flask(__name__)
 # Alfred = Alfredclass.Alfred
 asgi_app = WsgiToAsgi(app)
 VALID_PLATFORMS = {"telegram", "discord", "whatsapp"}
-CORS(app, origins=['https://87086624075f.ngrok-free.app', "https://www.employers-ai.site", "https://employers-ai.site"])
+CORS(app, origins=['https://87086624075f.ngrok-free.app', 'https://mediacutsstudio.com', "https://www.employers-ai.site", "https://employers-ai.site"])
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
