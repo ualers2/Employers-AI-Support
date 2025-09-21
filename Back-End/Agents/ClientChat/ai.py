@@ -166,7 +166,7 @@ async def _load_company_documents(company_docs: Dict, filenames: List[str],
             if os.path.exists(storage_abs_path):
                 path_file = storage_abs_path
             else:
-                path_file = download_(upload_url, storage_abs_path, "support", file_id, "freitasalexandre810@gmail_com")
+                path_file = download_(upload_url, storage_abs_path, "support", file_id, user_id)
 
             with open(path_file, "r", encoding="utf-8") as f:
                 content = f.read()

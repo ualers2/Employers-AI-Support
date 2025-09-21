@@ -203,7 +203,7 @@ def chat_assistant():
             conversation_history=conversation_history,
             model=model,
             UPLOAD_URL=UPLOAD_URL_VIDEOMANAGER,
-            USER_ID=str(numeric_user_id),
+            USER_ID=str(user_id),
             enable_analytics=enable_analytics
         ))
 
@@ -358,7 +358,7 @@ def upload_alfred_file():
         file_stats = os.stat(file_path)
         file_size_bytes = file_stats.st_size
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime)
-        file_id = upload_(project_name, file_path, USER_ID_FOR_TEST)
+        file_id = upload_(project_name, file_path, user_id)
 
         alfred_file = AlfredFile(
             unique_filename=unique_filename,
@@ -789,7 +789,7 @@ def list_alfred_files():
             unique_filename = af.unique_filename
             file_id = af.file_id
             save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
-            local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+            local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, user_id)
             file_stats = os.stat(local_path)
             last_modified_dt = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
 
@@ -845,7 +845,7 @@ def update_alfred_file_content(fileId):
         unique_filename = alfred_file.unique_filename
         file_id = alfred_file.file_id
         save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
-        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, user_id)
         
 
         with open(local_path, 'w', encoding='utf-8') as f:
@@ -854,7 +854,7 @@ def update_alfred_file_content(fileId):
         file_stats = os.stat(local_path)
         last_modified_timestamp = datetime.fromtimestamp(file_stats.st_mtime, tz=timezone.utc)
 
-        file_id = upload_(project_name, local_path, USER_ID_FOR_TEST)
+        file_id = upload_(project_name, local_path, user_id)
 
         alfred_file.file_id = file_id
         alfred_file.size_bytes = file_stats.st_size
@@ -904,7 +904,7 @@ def get_alfred_file_content(fileId):
         unique_filename = alfred_file.unique_filename
         file_id = alfred_file.file_id
         save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
-        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
+        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, user_id)
 
         with open(local_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -945,9 +945,7 @@ def download_alfred_file(fileId):
         unique_filename = alfred_file.unique_filename
         file_id = alfred_file.file_id
         save_path = os.path.join(os.path.dirname(__file__), "Knowledge", f"{unique_filename}")
-        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, USER_ID_FOR_TEST)
-        
-        # file_id = upload_(project_name, local_path, USER_ID_FOR_TEST)
+        local_path = download_(UPLOAD_URL_VIDEOMANAGER, save_path, project_name, file_id, user_id)
         
         if not os.path.exists(local_path):
             return jsonify({"error": "Arquivo não encontrado no disco."}), 404
